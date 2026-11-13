@@ -8,6 +8,7 @@ on:
 jobs:
   build-android-apk:
     runs-on: ubuntu-latest
+    timeout-minutes: 360
     steps:
       - name: Free Runner Disk Space
         run: |
@@ -20,24 +21,12 @@ jobs:
           path: krita
           fetch-depth: 2
 
-      - name: Discover Official KDE Android Image & Build APK
+      - name: Build & Package APK Inside Official KDE Container
         run: |
           cd "$GITHUB_WORKSPACE/krita"
-
-          # 1. Extract the exact Android image from Krita's .gitlab-ci.yml or KDE's Registry API
-          KDE_IMG=$(grep -oE "invent-registry\.kde\.org/sysadmin/ci-images/[a-zA-Z0-9_.:/-]*android[a-zA-Z0-9_.:/-]*" .gitlab-ci.yml | head -n 1 || true)
-
-          if [ -z "$KDE_IMG" ]; then
-            echo "[*] Querying KDE GitLab Container Registry API for active Krita Android image..."
-            REPO_PATH=$(curl -s "https://invent.kde.org/api/v4/projects/sysadmin%2Fci-images/registry/repositories?per_page=100" \
-              | python3 -c "import sys,json; repos=json.load(sys.stdin); print(next((r['location'] for r in repos if 'krita-android' in r['path'] or 'android-sdk' in r['path']), ''))")
-            KDE_IMG="${REPO_PATH}:latest"
-          fi
-
-          echo "[+] Using Official KDE Container: $KDE_IMG"
+          KDE_IMG="invent-registry.kde.org/sysadmin/ci-images/krita-android-sdk36-2204:latest"
           docker pull "$KDE_IMG"
 
-          # 2. Write the inner build script to execute inside the KDE Android container
           cat << 'INNER_EOF' > run_kde_build.sh
           #!/bin/bash
           set -e
@@ -62,28 +51,50 @@ jobs:
           source "$KDECI_WORKDIR_PATH/PythonEnv/bin/activate"
           pip install -r "$CI_PROJECT_DIR/krita-deps-management/requirements.txt"
 
+          # Fix 1: Generate .kde-ci.yml directly in /workspace/krita and disable slow unit tests/cppcheck
+          python -s "$CI_PROJECT_DIR/krita-deps-management/tools/generate-deps-file.py" \
+            -o "$CI_PROJECT_DIR/.kde-ci.yml" \
+            -s "$CI_PROJECT_DIR/krita-deps-management/latest/krita-deps.yml"
+          python -c "import yaml; p='$CI_PROJECT_DIR/.kde-ci.yml'; d=yaml.safe_load(open(p)); d.setdefault('Options',{})['build-tests']=False; d['Options']['run-tests']=False; d['Options']['run-cppcheck']=False; yaml.safe_dump(d,open(p,'w'))"
+          cp "$CI_PROJECT_DIR/.kde-ci.yml" "$KDECI_WORKDIR_PATH/.kde-ci.yml"
+
+          # Fix 2: Run setup-env.py and source the actual generated env path (/workspace/workdir/krita/env)
           python krita-deps-management/tools/setup-env.py \
             --full-krita-env \
             -v "$KDECI_WORKDIR_PATH/PythonEnv" \
             --android-abi "$KDECI_ANDROID_ABI" \
             --root "$KDECI_WORKDIR_PATH"
+          cp "$CI_PROJECT_DIR/.kde-ci.yml" "$KDECI_WORKDIR_PATH/.kde-ci.yml"
 
-          source "$CI_PROJECT_DIR/env"
+          if [ -f "$KDECI_WORKDIR_PATH/krita/env" ]; then
+            source "$KDECI_WORKDIR_PATH/krita/env"
+          elif [ -f "$CI_PROJECT_DIR/env" ]; then
+            source "$CI_PROJECT_DIR/env"
+          fi
 
-          python -u build-tools/ci-scripts/build-android-package.py || {
-            echo "[!] AI C++ UI patch failed to compile; falling back to clean C++ with Brocreate branding..."
+          # Fix 3: Compile Krita into _install, then package the APK
+          build_and_package() {
+            python -u "$CI_PROJECT_DIR/krita-deps-management/ci-utilities/run-ci-build.py" \
+              --project krita \
+              --branch master \
+              --platform Android/arm64-v8a \
+              --skip-publishing
+            python -u "$CI_PROJECT_DIR/build-tools/ci-scripts/build-android-package.py"
+          }
+
+          build_and_package || {
+            echo "[!] AI C++ patch had a compile error; falling back to clean C++ with Brocreate branding..."
             git checkout HEAD~1 -- libs/ui/ || true
             sed -i 's/"Krita"/"Brocreate"/g' libs/ui/KisMainWindow.cpp libs/ui/KisWelcomePageWidget.cpp || true
-            rm -rf _build _packaging "$KDECI_WORKDIR_PATH/krita"
-            python -u build-tools/ci-scripts/build-android-package.py
+            rm -rf "$KDECI_WORKDIR_PATH/krita/_build" "$KDECI_WORKDIR_PATH/krita/_packaging"
+            build_and_package
           }
 
           mkdir -p "$CI_PROJECT_DIR/_packaging"
-          cp -rv "$KDECI_WORKDIR_PATH/krita/_packaging/"*.apk "$CI_PROJECT_DIR/_packaging/" 2>/dev/null || true
+          find "$KDECI_WORKDIR_PATH" "$CI_PROJECT_DIR" -name "*.apk" -exec cp -v {} "$CI_PROJECT_DIR/_packaging/" \; || true
           INNER_EOF
           chmod +x run_kde_build.sh
 
-          # 3. Run the build inside the official KDE container
           docker run --rm --user root \
             -v "$GITHUB_WORKSPACE:/workspace" \
             -w /workspace/krita \
@@ -96,7 +107,6 @@ jobs:
         with:
           name: Brocreate-Android-APK
           path: |
-            krita/_packaging/**/*.apk
-            workdir/krita/_packaging/**/*.apk
+            krita/_packaging/*.apk
             **/*.apk
           if-no-files-found: warn
