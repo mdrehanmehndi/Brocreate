@@ -79,7 +79,7 @@ public:
     explicit BrocreateColorLoupe(QWidget *parent = nullptr)
         : QWidget(parent, Qt::ToolTip | Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint)
     {
-        setAttribute(Qt::WA_TransparentForInput, true);
+        setAttribute(Qt::WA_TransparentForMouseEvents, true);
         setAttribute(Qt::WA_TranslucentBackground, true);
         setAttribute(Qt::WA_ShowWithoutActivating, true);
         setFixedSize(76, 76);
