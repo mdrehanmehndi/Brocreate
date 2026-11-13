@@ -1,4 +1,4 @@
-name: Official KDE Android APK Builder (Brocreate)
+name: Build Brocreate Android APK
 
 on:
   push:
@@ -8,71 +8,87 @@ on:
 jobs:
   build-android-apk:
     runs-on: ubuntu-latest
-    container:
-      image: registry.kde.org/sysadmin/ci-images/krita-android-builder:latest
-      options: --user root
     steps:
-      - name: Maximize GitHub Runner Disk Space
+      - name: Free Runner Disk Space
         run: |
-          rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
+          sudo rm -rf /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL || true
+          df -h
 
-      - name: Checkout Brocreate Repository
+      - name: Checkout Brocreate Source
         uses: actions/checkout@v4
         with:
           path: krita
           fetch-depth: 2
 
-      - name: Set Up Official KDE Android Environment & Prebuilt Deps (arm64-v8a)
+      - name: Discover Official KDE Android Image & Build APK
         run: |
-          git config --global --add safe.directory '*'
-          export SRCDIR="$GITHUB_WORKSPACE"
-          export WORKDIR="$GITHUB_WORKSPACE/workdir"
-          mkdir -p "$WORKDIR"
+          cd "$GITHUB_WORKSPACE/krita"
 
-          # Load official KDE Android SDK/NDK environment variables from container
+          # 1. Extract the exact Android image from Krita's .gitlab-ci.yml or KDE's Registry API
+          KDE_IMG=$(grep -oE "invent-registry\.kde\.org/sysadmin/ci-images/[a-zA-Z0-9_.:/-]*android[a-zA-Z0-9_.:/-]*" .gitlab-ci.yml | head -n 1 || true)
+
+          if [ -z "$KDE_IMG" ]; then
+            echo "[*] Querying KDE GitLab Container Registry API for active Krita Android image..."
+            REPO_PATH=$(curl -s "https://invent.kde.org/api/v4/projects/sysadmin%2Fci-images/registry/repositories?per_page=100" \
+              | python3 -c "import sys,json; repos=json.load(sys.stdin); print(next((r['location'] for r in repos if 'krita-android' in r['path'] or 'android-sdk' in r['path']), ''))")
+            KDE_IMG="${REPO_PATH}:latest"
+          fi
+
+          echo "[+] Using Official KDE Container: $KDE_IMG"
+          docker pull "$KDE_IMG"
+
+          # 2. Write the inner build script to execute inside the KDE Android container
+          cat << 'INNER_EOF' > run_kde_build.sh
+          #!/bin/bash
+          set -e
+          git config --global --add safe.directory '*'
+
           if [ -f /var/lib/ci-files/setup-environment.sh ]; then
             source /var/lib/ci-files/setup-environment.sh
           fi
-          export KDECI_ANDROID_ABI=arm64-v8a
-          export ANDROID_ABI=arm64-v8a
 
-          # Clone official KDE dependency & CI utility scripts
-          cd "$SRCDIR/krita"
+          export CI_PROJECT_DIR="/workspace/krita"
+          export KDECI_WORKDIR_PATH="/workspace/workdir"
+          export KDECI_ANDROID_ABI="arm64-v8a"
+          export ANDROID_ABI="arm64-v8a"
+          mkdir -p "$KDECI_WORKDIR_PATH"
+
+          cd "$CI_PROJECT_DIR"
+          rm -rf krita-deps-management
           git clone --depth=1 https://invent.kde.org/packaging/krita-deps-management.git krita-deps-management
           git clone --depth=1 https://invent.kde.org/packaging/krita-ci-utilities.git krita-deps-management/ci-utilities
 
-          # Set up Python venv and fetch prebuilt Android arm64-v8a libraries
-          python3 -m venv --upgrade-deps "$WORKDIR/PythonEnv"
-          source "$WORKDIR/PythonEnv/bin/activate"
-          python -m pip install -r "$SRCDIR/krita/krita-deps-management/requirements.txt"
+          python3 -m venv --upgrade-deps "$KDECI_WORKDIR_PATH/PythonEnv"
+          source "$KDECI_WORKDIR_PATH/PythonEnv/bin/activate"
+          pip install -r "$CI_PROJECT_DIR/krita-deps-management/requirements.txt"
 
           python krita-deps-management/tools/setup-env.py \
             --full-krita-env \
-            -v "$WORKDIR/PythonEnv" \
+            -v "$KDECI_WORKDIR_PATH/PythonEnv" \
             --android-abi "$KDECI_ANDROID_ABI" \
-            --root "$WORKDIR"
+            --root "$KDECI_WORKDIR_PATH"
 
-      - name: Compile Brocreate APK using Official KDE Script
-        run: |
-          export SRCDIR="$GITHUB_WORKSPACE"
-          export WORKDIR="$GITHUB_WORKSPACE/workdir"
-          if [ -f /var/lib/ci-files/setup-environment.sh ]; then
-            source /var/lib/ci-files/setup-environment.sh
-          fi
-          export KDECI_ANDROID_ABI=arm64-v8a
-          export ANDROID_ABI=arm64-v8a
+          source "$CI_PROJECT_DIR/env"
 
-          cd "$SRCDIR/krita"
-          source "$SRCDIR/krita/env"
-
-          # Attempt 1: Build with full Gemini C++ UI changes
-          python build-tools/ci-scripts/build-android-package.py || {
-            echo "[!] AI C++ modification had a compile error. Applying clean C++ fallback with Brocreate branding & XMLGUI..."
-            git checkout HEAD~1 -- libs/ui/KisMainWindow.h libs/ui/KisMainWindow.cpp libs/ui/KisWelcomePageWidget.h libs/ui/KisWelcomePageWidget.cpp libs/ui/input/kis_input_manager.cpp libs/ui/opengl/kis_opengl_canvas2.cpp
-            sed -i 's/"Krita"/"Brocreate"/g' libs/ui/KisMainWindow.cpp libs/ui/KisWelcomePageWidget.cpp
-            rm -rf _build _packaging
-            python build-tools/ci-scripts/build-android-package.py
+          python -u build-tools/ci-scripts/build-android-package.py || {
+            echo "[!] AI C++ UI patch failed to compile; falling back to clean C++ with Brocreate branding..."
+            git checkout HEAD~1 -- libs/ui/ || true
+            sed -i 's/"Krita"/"Brocreate"/g' libs/ui/KisMainWindow.cpp libs/ui/KisWelcomePageWidget.cpp || true
+            rm -rf _build _packaging "$KDECI_WORKDIR_PATH/krita"
+            python -u build-tools/ci-scripts/build-android-package.py
           }
+
+          mkdir -p "$CI_PROJECT_DIR/_packaging"
+          cp -rv "$KDECI_WORKDIR_PATH/krita/_packaging/"*.apk "$CI_PROJECT_DIR/_packaging/" 2>/dev/null || true
+          INNER_EOF
+          chmod +x run_kde_build.sh
+
+          # 3. Run the build inside the official KDE container
+          docker run --rm --user root \
+            -v "$GITHUB_WORKSPACE:/workspace" \
+            -w /workspace/krita \
+            "$KDE_IMG" \
+            /bin/bash /workspace/krita/run_kde_build.sh
 
       - name: Upload Compiled Brocreate APK
         if: always()
@@ -80,6 +96,7 @@ jobs:
         with:
           name: Brocreate-Android-APK
           path: |
-            **/krita/_packaging/**/*.apk
-            **/_packaging/**/*.apk
+            krita/_packaging/**/*.apk
+            workdir/krita/_packaging/**/*.apk
             **/*.apk
+          if-no-files-found: warn
