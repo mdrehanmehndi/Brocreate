@@ -78,7 +78,6 @@ jobs:
           export EXTERNALS_DOWNLOAD_DIR="/workspace/workdir/cache/downloads"
           export KDECI_GITLAB_SERVER="https://invent.kde.org/"
           export KDECI_PACKAGE_PROJECT="teams/ci-artifacts/krita-android-arm64-v8a"
-          export KDECI_SKIP_ECM_ANDROID_TOOLCHAIN="True"
           export KDECI_BUILD_TYPE="Release"
           export KDECI_COMPRESS_PACKAGES_ON_DOWNLOAD="1"
           export KDECI_ALLOW_PACKAGE_OVERRIDE_BY_CACHE="1"
