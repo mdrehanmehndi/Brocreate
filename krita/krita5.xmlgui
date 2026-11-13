@@ -32,9 +32,6 @@ xsi:schemaLocation="http://www.kde.org/standards/kxmlgui/1.0  http://www.kde.org
       <Separator/>
       <Action name="create_template"/>
       <Action name="create_copy"/>
-      <!--Separator/>
-      <Action name="file_print"/>
-      <Action name="file_print_preview"/-->
       <Separator/>
       <Action name="file_documentinfo"/>
       <Separator/>
@@ -127,24 +124,21 @@ xsi:schemaLocation="http://www.kde.org/standards/kxmlgui/1.0  http://www.kde.org
       <Separator/>
       <Action name="view_grid"/>
       <Action name="view_pixel_grid"/>
-
-
       <Separator/>
       <Menu name="SnapTo">
         <text>&amp;Snap To</text>
         <Action name="view_snap_to_guides"/>
-            <Action name="view_snap_to_grid"/>
-            <Action name="view_snap_to_pixel"/>
-          <Action name="view_snap_orthogonal" />
-            <Action name="view_snap_node" />
-            <Action name="view_snap_extension" />
-            <Action name="view_snap_intersection" />
-            <Action name="view_snap_bounding_box" />
-            <Action name="view_snap_image_bounds" />
-             <Action name="view_snap_image_center" />
+        <Action name="view_snap_to_grid"/>
+        <Action name="view_snap_to_pixel"/>
+        <Action name="view_snap_orthogonal" />
+        <Action name="view_snap_node" />
+        <Action name="view_snap_extension" />
+        <Action name="view_snap_intersection" />
+        <Action name="view_snap_bounding_box" />
+        <Action name="view_snap_image_bounds" />
+        <Action name="view_snap_image_center" />
       </Menu>
       <Separator/>
-
       <Action name="view_toggle_painting_assistants"/>
       <Action name="view_toggle_assistant_previews"/>
       <Action name="view_toggle_reference_images"/>
@@ -302,7 +296,6 @@ xsi:schemaLocation="http://www.kde.org/standards/kxmlgui/1.0  http://www.kde.org
          <Action name="layersplit"/>
          <Action name="clones_array"/>
       </Menu>
-
       <Separator/>
       <Action name="EditLayerMetaData"/>
       <Action name="histogram"/>
@@ -314,7 +307,6 @@ xsi:schemaLocation="http://www.kde.org/standards/kxmlgui/1.0  http://www.kde.org
       <Action name="merge_selected_layers"/>
       <Separator/>
       <Action name="layer_style"/>
-
     </Menu>
     <Menu name="Select">
       <text>&amp;Select</text>
@@ -401,9 +393,6 @@ xsi:schemaLocation="http://www.kde.org/standards/kxmlgui/1.0  http://www.kde.org
       <Action name="theme_menu"/>
       <Action name="style_menu"/>
       <Separator/>
-      <!-- `Configure Shortcuts` was moved into main configuration menu -->
-      <!-- <Action name="options_configure_keybinding"/> -->
-      <Separator/>
       <Action name="switch_application_language"/>
       <Action name="settings_active_author"/>
       <Separator/>
@@ -431,34 +420,50 @@ xsi:schemaLocation="http://www.kde.org/standards/kxmlgui/1.0  http://www.kde.org
       <Action name="help_about_kde"/>
     </Menu>
   </MenuBar>
-  <ToolBar name="mainToolBar" fullWidth="false" noMerge="1">
-    <Text>File</Text>
+
+  <!-- Brocreate Top-Left Floating Island: New, Save, Open, Color Swatch, Blend Mode, View toggles -->
+  <ToolBar name="mainToolBar" fullWidth="false" noMerge="1" position="top">
+    <Text>Brocreate Studio Header</Text>
     <Action name="file_new"/>
-    <Action name="file_open"/>
     <Action name="file_save"/>
+    <Action name="file_open"/>
+    <Separator/>
+    <Action name="dual"/>
+    <Action name="options_configure"/>
+    <Separator/>
+    <Action name="composite_actions"/>
+    <Separator/>
+    <Action name="view_grid"/>
+    <Action name="view_show_guides"/>
+    <Action name="wrap_around_mode"/>
+    <Action name="mirror_canvas"/>
   </ToolBar>
-  <ToolBar name="editToolBar" fullWidth="false" noMerge="1">
-    <Text>Edit</Text>
+
+  <!-- Brocreate Quick Undo/Redo Pill -->
+  <ToolBar name="editToolBar" fullWidth="false" noMerge="1" position="top">
+    <Text>History</Text>
     <Action name="edit_undo"/>
     <Action name="edit_redo"/>
   </ToolBar>
+
+  <!-- Brocreate Top-Center Dynamic Island: Brush, Eraser, Presets, Opacity Pill, Size Pill, Mirror & Fullscreen -->
   <ToolBar name="BrushesAndStuff" position="top">
-    <Text>Brushes and Stuff</Text>
-    <Action name="gradients"/>
-    <Action name="patterns"/>
-    <Separator/>
-    <Action name="dual"/>
-    <Separator/>
+    <Text>Dynamic Island</Text>
     <Action name="paintops"/>
+    <Action name="erase_action"/>
     <Action name="paintop_options"/>
-    <Action name="composite_actions"/>
+    <Separator/>
     <Action name="brushslider1"/>
     <Action name="brushslider2"/>
+    <Separator/>
     <Action name="mirror_actions"/>
+    <Action name="view_show_canvas_only"/>
+    <Action name="fullscreen"/>
     <Action name="expanding_spacer_1"/>
     <Action name="select_layout"/>
     <Action name="workspaces"/>
   </ToolBar>
+
   <ToolBar name="customToolBar1" fullWidth="false" position="top">
     <Text>Custom toolbar 1</Text>
   </ToolBar>

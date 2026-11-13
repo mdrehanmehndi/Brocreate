@@ -47,6 +47,22 @@
 #include <QTemporaryDir>
 #include <QScrollArea>
 #include <QActionGroup>
+#include <QFrame>
+#include <QHBoxLayout>
+#include <QVBoxLayout>
+#include <QToolButton>
+#include <QPushButton>
+#include <QComboBox>
+#include <QLabel>
+#include <QElapsedTimer>
+#include <QTimer>
+#include <QTouchEvent>
+#include <QTabletEvent>
+#include <QPainter>
+#include <QPainterPath>
+#include <QButtonGroup>
+#include <QLineF>
+#include <QtMath>
 
 #include <kactioncollection.h>
 #include <kactionmenu.h>
@@ -162,11 +178,322 @@
 #include <config-qt-patches-present.h>
 #include <KisPlatformPluginInterfaceFactory.h>
 
+#include <cmath>
 #include <mutex>
 
 #if defined(Q_OS_ANDROID) && KRITA_QT_HAS_ANDROID_QPLATFORMSCREEN_DENSITY_ADJUSTMENT
 #include <KisAndroidScaling.h>
 #endif
+
+namespace {
+
+enum class BrocreateGlyph {
+    NewDoc,
+    OpenDoc,
+    SaveDoc,
+    Settings,
+    Undo,
+    Redo,
+    Animation,
+    StudioDock,
+    Brush,
+    Eraser,
+    Selection,
+    Mirror,
+    Fullscreen,
+    Move,
+    VectorLine,
+    Fill,
+    Lasso,
+    RectSelect,
+    Eyedropper,
+    Symmetry,
+    QuickAdd
+};
+
+static QIcon makeBrocreateIcon(BrocreateGlyph glyph, const QColor &strokeColor = QColor("#E4E4E7"))
+{
+    const int size = 48;
+    QPixmap pix(size, size);
+    pix.fill(Qt::transparent);
+
+    QPainter p(&pix);
+    p.setRenderHint(QPainter::Antialiasing, true);
+    QPen pen(strokeColor, 3.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
+    p.setPen(pen);
+    p.setBrush(Qt::NoBrush);
+
+    switch (glyph) {
+    case BrocreateGlyph::NewDoc:
+        p.drawRoundedRect(QRectF(11, 8, 22, 30), 4, 4);
+        p.drawLine(QPointF(29, 25), QPointF(39, 25));
+        p.drawLine(QPointF(34, 20), QPointF(34, 30));
+        break;
+    case BrocreateGlyph::OpenDoc:
+        p.drawRoundedRect(QRectF(8, 13, 32, 23), 4, 4);
+        p.drawLine(QPointF(8, 19), QPointF(22, 19));
+        p.drawLine(QPointF(16, 13), QPointF(20, 19));
+        break;
+    case BrocreateGlyph::SaveDoc:
+        p.drawRoundedRect(QRectF(9, 9, 30, 30), 4, 4);
+        p.drawRect(QRectF(16, 9, 14, 10));
+        p.drawRoundedRect(QRectF(15, 25, 18, 14), 2, 2);
+        break;
+    case BrocreateGlyph::Settings: {
+        p.drawEllipse(QPointF(24, 24), 6.5, 6.5);
+        for (int i = 0; i < 8; ++i) {
+            const qreal a = i * M_PI / 4.0;
+            p.drawLine(QPointF(24 + 10.5 * std::cos(a), 24 + 10.5 * std::sin(a)),
+                       QPointF(24 + 14.5 * std::cos(a), 24 + 14.5 * std::sin(a)));
+        }
+        break;
+    }
+    case BrocreateGlyph::Undo:
+        p.drawArc(QRectF(12, 15, 24, 20), 0, 180 * 16);
+        p.drawLine(QPointF(12, 25), QPointF(17, 19));
+        p.drawLine(QPointF(12, 25), QPointF(19, 27));
+        break;
+    case BrocreateGlyph::Redo:
+        p.drawArc(QRectF(12, 15, 24, 20), 0, 180 * 16);
+        p.drawLine(QPointF(36, 25), QPointF(31, 19));
+        p.drawLine(QPointF(36, 25), QPointF(29, 27));
+        break;
+    case BrocreateGlyph::Animation:
+        p.drawRoundedRect(QRectF(9, 12, 30, 24), 4, 4);
+        p.drawLine(QPointF(17, 12), QPointF(17, 36));
+        p.drawLine(QPointF(31, 12), QPointF(31, 36));
+        p.drawLine(QPointF(22, 19), QPointF(27, 24));
+        p.drawLine(QPointF(27, 24), QPointF(22, 29));
+        break;
+    case BrocreateGlyph::StudioDock:
+        p.drawRoundedRect(QRectF(9, 11, 30, 26), 4, 4);
+        p.drawLine(QPointF(28, 11), QPointF(28, 37));
+        break;
+    case BrocreateGlyph::Brush:
+        p.drawLine(QPointF(13, 35), QPointF(33, 12));
+        p.drawLine(QPointF(18, 37), QPointF(37, 16));
+        p.drawEllipse(QPointF(13, 35), 4.5, 4.5);
+        break;
+    case BrocreateGlyph::Eraser: {
+        QPainterPath path;
+        path.moveTo(15, 34);
+        path.lineTo(28, 13);
+        path.lineTo(37, 19);
+        path.lineTo(24, 38);
+        path.closeSubpath();
+        p.drawPath(path);
+        p.drawLine(QPointF(20, 26), QPointF(30, 31));
+        break;
+    }
+    case BrocreateGlyph::Selection:
+        p.drawEllipse(QRectF(11, 12, 26, 20));
+        p.drawLine(QPointF(20, 32), QPointF(17, 38));
+        break;
+    case BrocreateGlyph::Mirror:
+        p.drawLine(QPointF(24, 9), QPointF(24, 39));
+        p.drawPolygon(QPolygonF({QPointF(10, 24), QPointF(19, 16), QPointF(19, 32)}));
+        p.drawPolygon(QPolygonF({QPointF(38, 24), QPointF(29, 16), QPointF(29, 32)}));
+        break;
+    case BrocreateGlyph::Fullscreen:
+        p.drawPolyline(QPolygonF({QPointF(10, 18), QPointF(10, 10), QPointF(18, 10)}));
+        p.drawPolyline(QPolygonF({QPointF(30, 10), QPointF(38, 10), QPointF(38, 18)}));
+        p.drawPolyline(QPolygonF({QPointF(38, 30), QPointF(38, 38), QPointF(30, 38)}));
+        p.drawPolyline(QPolygonF({QPointF(18, 38), QPointF(10, 38), QPointF(10, 30)}));
+        break;
+    case BrocreateGlyph::Move:
+        p.drawPolygon(QPolygonF({QPointF(15, 10), QPointF(15, 34), QPointF(22, 27), QPointF(31, 27)}));
+        break;
+    case BrocreateGlyph::VectorLine: {
+        QPainterPath curve;
+        curve.moveTo(11, 35);
+        curve.cubicTo(14, 14, 34, 34, 37, 13);
+        p.drawPath(curve);
+        p.drawEllipse(QPointF(11, 35), 2.5, 2.5);
+        p.drawEllipse(QPointF(37, 13), 2.5, 2.5);
+        break;
+    }
+    case BrocreateGlyph::Fill:
+        p.drawRoundedRect(QRectF(11, 15, 18, 18), 3, 3);
+        p.drawLine(QPointF(27, 23), QPointF(36, 32));
+        p.drawEllipse(QPointF(36, 35), 2.5, 3.5);
+        break;
+    case BrocreateGlyph::Lasso: {
+        QPen dashed(strokeColor, 2.8, Qt::DashLine, Qt::RoundCap, Qt::RoundJoin);
+        p.setPen(dashed);
+        p.drawEllipse(QRectF(11, 11, 26, 22));
+        p.setPen(pen);
+        p.drawLine(QPointF(21, 33), QPointF(18, 39));
+        break;
+    }
+    case BrocreateGlyph::RectSelect: {
+        QPen dashed(strokeColor, 2.8, Qt::DashLine, Qt::RoundCap, Qt::RoundJoin);
+        p.setPen(dashed);
+        p.drawRoundedRect(QRectF(11, 11, 26, 26), 3, 3);
+        break;
+    }
+    case BrocreateGlyph::Eyedropper:
+        p.drawLine(QPointF(12, 36), QPointF(29, 19));
+        p.drawLine(QPointF(26, 15), QPointF(33, 22));
+        p.drawEllipse(QPointF(34, 14), 4.5, 4.5);
+        break;
+    case BrocreateGlyph::Symmetry:
+        for (int i = 0; i < 6; ++i) {
+            const qreal a = i * M_PI / 3.0;
+            p.drawLine(QPointF(24, 24), QPointF(24 + 13 * std::cos(a), 24 + 13 * std::sin(a)));
+        }
+        p.drawEllipse(QPointF(24, 24), 4.0, 4.0);
+        break;
+    case BrocreateGlyph::QuickAdd:
+        p.drawEllipse(QPointF(24, 24), 13.0, 13.0);
+        p.drawLine(QPointF(17, 24), QPointF(31, 24));
+        p.drawLine(QPointF(24, 17), QPointF(24, 31));
+        break;
+    }
+
+    p.end();
+    return QIcon(pix);
+}
+
+class BrocreatePillSlider : public QWidget
+{
+public:
+    enum StyleMode {
+        OpacityBluePill,
+        SizeDarkPill
+    };
+
+    explicit BrocreatePillSlider(StyleMode mode, QWidget *parent = nullptr)
+        : QWidget(parent)
+        , m_mode(mode)
+    {
+        setFixedSize(mode == OpacityBluePill ? 124 : 128, 30);
+        setCursor(Qt::PointingHandCursor);
+        setAttribute(Qt::WA_AcceptTouchEvents, true);
+    }
+
+    void setNormalizedValue(qreal value)
+    {
+        const qreal clamped = qBound<qreal>(0.0, value, 1.0);
+        if (!qFuzzyCompare(m_value + 1.0, clamped + 1.0)) {
+            m_value = clamped;
+            update();
+        }
+    }
+
+    qreal normalizedValue() const { return m_value; }
+
+    void setDisplayText(const QString &text)
+    {
+        if (m_displayText != text) {
+            m_displayText = text;
+            update();
+        }
+    }
+
+    std::function<void(qreal)> onValueChanged;
+
+protected:
+    void paintEvent(QPaintEvent *) override
+    {
+        QPainter p(this);
+        p.setRenderHint(QPainter::Antialiasing, true);
+
+        const QRectF r = rect().adjusted(0.5, 0.5, -0.5, -0.5);
+        QPainterPath clip;
+        clip.addRoundedRect(r, 9.0, 9.0);
+        p.setClipPath(clip);
+
+        // Track background
+        p.fillRect(r, QColor("#1E1E22"));
+
+        // Value fill
+        const qreal fillWidth = qMax<qreal>(0.0, r.width() * m_value);
+        if (fillWidth > 0.5) {
+            QRectF fillRect(r.left(), r.top(), fillWidth, r.height());
+            if (m_mode == OpacityBluePill) {
+                p.fillRect(fillRect, QColor("#0066FF"));
+            } else {
+                p.fillRect(fillRect, QColor("#262B36"));
+                p.fillRect(QRectF(r.left(), r.top(), qMin<qreal>(fillWidth, 6.0), r.height()), QColor("#0066FF"));
+            }
+        }
+
+        p.setClipping(false);
+        p.setPen(QPen(QColor("#27272A"), 1.0));
+        p.drawRoundedRect(r, 9.0, 9.0);
+
+        // Icon
+        p.setPen(QPen(QColor("#FFFFFF"), 1.5));
+        if (m_mode == OpacityBluePill) {
+            const QRectF iconRect(r.left() + 9.0, r.center().y() - 5.5, 11.0, 11.0);
+            p.drawEllipse(iconRect);
+            p.setBrush(QColor("#FFFFFF"));
+            p.drawPie(iconRect, 90 * 16, 180 * 16);
+            p.setBrush(Qt::NoBrush);
+        } else {
+            p.setBrush(QColor("#0066FF"));
+            p.setPen(Qt::NoPen);
+            p.drawEllipse(QPointF(r.left() + 14.0, r.center().y()), 3.5, 3.5);
+        }
+
+        // Value label
+        p.setPen(QColor("#F4F4F5"));
+        QFont f = font();
+        f.setPointSizeF(9.5);
+        f.setWeight(QFont::DemiBold);
+        p.setFont(f);
+        const QRectF textRect = r.adjusted(26.0, 0.0, -8.0, 0.0);
+        p.drawText(textRect, Qt::AlignVCenter | Qt::AlignLeft, m_displayText);
+    }
+
+    void mousePressEvent(QMouseEvent *e) override
+    {
+        m_dragging = true;
+        updateFromPos(e->pos().x());
+        e->accept();
+    }
+
+    void mouseMoveEvent(QMouseEvent *e) override
+    {
+        if (m_dragging) {
+            updateFromPos(e->pos().x());
+            e->accept();
+        }
+    }
+
+    void mouseReleaseEvent(QMouseEvent *e) override
+    {
+        m_dragging = false;
+        e->accept();
+    }
+
+    void wheelEvent(QWheelEvent *e) override
+    {
+        const qreal delta = e->angleDelta().y() > 0 ? 0.04 : -0.04;
+        setNormalizedValue(m_value + delta);
+        if (onValueChanged) {
+            onValueChanged(m_value);
+        }
+        e->accept();
+    }
+
+private:
+    void updateFromPos(int x)
+    {
+        const qreal ratio = qBound<qreal>(0.0, qreal(x) / qMax(1, width()), 1.0);
+        setNormalizedValue(ratio);
+        if (onValueChanged) {
+            onValueChanged(m_value);
+        }
+    }
+
+    StyleMode m_mode;
+    qreal m_value {0.35};
+    QString m_displayText;
+    bool m_dragging {false};
+};
+
+} // namespace
 
 class ToolDockerFactory : public KoDockFactoryBase
 {
@@ -329,6 +656,40 @@ public:
 
     KateCommandBar *commandBar {nullptr};
 
+    // Brocreate Tablet Floating UI & Gestures
+    QFrame *topLeftIsland {nullptr};
+    QFrame *topCenterIsland {nullptr};
+    QFrame *leftToolCapsule {nullptr};
+    QPushButton *colorSwatchButton {nullptr};
+    QComboBox *blendModeCombo {nullptr};
+    BrocreatePillSlider *opacityPill {nullptr};
+    BrocreatePillSlider *brushSizePill {nullptr};
+    QToolButton *brushModeBtn {nullptr};
+    QToolButton *eraserModeBtn {nullptr};
+    QToolButton *selectModeBtn {nullptr};
+    QToolButton *mirrorBtn {nullptr};
+    QToolButton *fullscreenBtn {nullptr};
+    QToolButton *animationModeBtn {nullptr};
+    QToolButton *studioToggleBtn {nullptr};
+    QButtonGroup *leftToolGroup {nullptr};
+    QList<QToolButton *> leftToolButtons;
+
+    bool brocreateUiInitialized {false};
+    bool animationLayoutActive {false};
+    bool canvasOnlyOverlayHidden {false};
+    bool updatingFromResource {false};
+
+    // Procreate Multi-Touch Gesture & Palm Rejection State
+    QElapsedTimer lastStylusTimer;
+    QElapsedTimer touchStartTimer;
+    QTimer *longPressEyedropperTimer {nullptr};
+    QPointF touchStartCentroid;
+    QPointF lastTouchCentroid;
+    qreal initialPinchSpan {0.0};
+    int maxTouchPoints {0};
+    bool touchGestureConsumed {false};
+    bool pinchFitTriggered {false};
+
     KisActionManager * actionManager() {
         return viewManager->actionManager();
     }
@@ -368,6 +729,7 @@ KisMainWindow::KisMainWindow(QUuid uuid)
     KisScopedPerformanceLogger perfLog(QStringLiteral("KisMainWindow::KisMainWindow"));
 
     KAcceleratorManager::setNoAccel(this);
+    setWindowTitle(QStringLiteral("Brocreate"));
 
     d->workspacemodel = new KisResourceModel(ResourceType::Workspaces, this);
     connect(d->workspacemodel, SIGNAL(modelReset()), this, SLOT(updateWindowMenu()));
@@ -521,11 +883,6 @@ KisMainWindow::KisMainWindow(QUuid uuid)
     if (isHelpMenuEnabled() && !d->helpMenu) {
         d->helpMenu = new KisKHelpMenu(this, KAboutData::applicationData(), false);
 
-        // workaround-less version:
-        // d->helpMenu = new KisKHelpMenu(this, QString()/*unused*/, false);
-
-        // The difference between using KisKActionCollection->addAction() is that
-        // these actions do not get tied to the MainWindow.  What does this all do?
         KisKActionCollection *actions = d->viewManager->actionCollection();
         QAction *helpContentsAction = d->helpMenu->action(KisKHelpMenu::menuHelpContents);
         QAction *whatsThisAction = d->helpMenu->action(KisKHelpMenu::menuWhatsThis);
@@ -558,21 +915,10 @@ KisMainWindow::KisMainWindow(QUuid uuid)
 
     // Custom handling of help action for manual URL outside docs.kde.org.
     QAction *helpAction = actionCollection()->action("help_contents");
-    helpAction->disconnect(SIGNAL(triggered()));
-    connect(helpAction, SIGNAL(triggered()), this, SLOT(showManual()));
-
-#if 0
-    //check for colliding shortcuts
-    QSet<QKeySequence> existingShortcuts;
-    Q_FOREACH (QAction* action, actionCollection()->actions()) {
-        if(action->shortcut() == QKeySequence(0)) {
-            continue;
-        }
-        dbgKrita << "shortcut " << action->text() << " " << action->shortcut();
-        Q_ASSERT(!existingShortcuts.contains(action->shortcut()));
-        existingShortcuts.insert(action->shortcut());
+    if (helpAction) {
+        helpAction->disconnect(SIGNAL(triggered()));
+        connect(helpAction, SIGNAL(triggered()), this, SLOT(showManual()));
     }
-#endif
 
     configChanged();
 
@@ -631,7 +977,6 @@ KisMainWindow::KisMainWindow(QUuid uuid)
             restoreWorkspace(workspace);
         }
         cfg.writeEntry("CanvasOnlyActive", false);
-        menuBar()->setVisible(true);
     }
 
     this->winId(); // Ensures the native window has been created.
@@ -659,7 +1004,7 @@ KisMainWindow::KisMainWindow(QUuid uuid)
     }
 #endif
 
-    // When Krita starts, Java side sends an event to set applicationState() to active. But, before
+    // When Brocreate starts, Java side sends an event to set applicationState() to active. But, before
     // the event could reach KisApplication's platform integration, it is cleared by KisOpenGLModeProber::probeFormat.
     // So, we send it manually when MainWindow shows up.
     QAndroidJniObject::callStaticMethod<void>("org/qtproject/qt5/android/QtNative", "setApplicationState", "(I)V", Qt::ApplicationActive);
@@ -677,30 +1022,14 @@ KisMainWindow::KisMainWindow(QUuid uuid)
     }
 
     applyMainWindowSettings(d->windowStateConfig);
+
+    // Initialize Brocreate Tablet UI, QSS dark theme, floating islands, and gestures
+    setupBrocreateUI();
+    applyBrocreateDarkTheme();
 }
 
 KisMainWindow::~KisMainWindow()
 {
-    //    Q_FOREACH (QAction *ac, actionCollection()->actions()) {
-    //        QAction *action = qobject_cast<QAction*>(ac);
-    //        if (action) {
-    //        qDebug() << "<Action"
-    //                 << "\n\tname=" << action->objectName()
-    //                 << "\n\ticon=" << action->icon().name()
-    //                 << "\n\ttext="  << action->text().replace("&", "&amp;")
-    //                 << "\n\twhatsThis="  << action->whatsThis()
-    //                 << "\n\ttoolTip="  << action->toolTip().replace("<html>", "").replace("</html>", "")
-    //                 << "\n\ticonText="  << action->iconText().replace("&", "&amp;")
-    //                 << "\n\tshortcut="  << action->shortcut().toString()
-    //                 << "\n\tisCheckable="  << QString((action->isChecked() ? "true" : "false"))
-    //                 << "\n\tstatusTip=" << action->statusTip()
-    //                 << "\n/>\n"   ;
-    //        }
-    //        else {
-    //            dbgKrita << "Got a non-qaction:" << ac->objectName();
-    //        }
-    //    }
-
     /**
      * Destructor of KisView accesses KisViewManager is multiple ways,
      * directly and via KoToolManager. Hence we should destroy all the
@@ -747,13 +1076,6 @@ void KisMainWindow::addView(KisView *view, QMdiSubWindow *subWindow)
 
     showView(view, subWindow);
     Q_EMIT restoringDone();
-
-//    QTabBar *tabBar = d->findTabBarHACK();
-//    Q_FOREACH(QObject *c, tabBar->children()) {
-//        if (QWidget *w = qobject_cast<QWidget*>(c)) {
-//            w->setAcceptDrops(true);
-//        }
-//    }
 }
 
 void KisMainWindow::notifyChildViewDestroyed(KisView *view)
@@ -784,18 +1106,6 @@ void KisMainWindow::showView(KisView *imageView, QMdiSubWindow *subwin)
             bool shouldMaximize = currentSubWin ? currentSubWin->isMaximized() : true;
             subwin = d->mdiArea->addSubWindow(imageView);
 
-            /**
-             * We set Qt::WA_DontCreateNativeAncestors in KisOpenGLCanvas2,
-             * so the parents will not receive native surfaces automatically.
-             * That is a problem for MDI-subwindows, since they may overlap.
-             * This overlapping cannot be resolved when the MDI-subwindow
-             * is an alien widget, but the wrapped widget is a native widget.
-             * The docorations of any subwindow will always be lower than
-             * the content of any of the subwindows.
-             *
-             * Therefore we explicitly create a native surface for every
-             * MDI-subwindow.
-             */
             const bool osManagedSurfacePresent = KisPlatformPluginInterfaceFactory::instance()->surfaceColorManagedByOS();
             const bool useNativeSurfaceForCanvas = KisConfig(true).effectiveShouldUseNativeSurfaceForCanvas(osManagedSurfacePresent);
             if (useNativeSurfaceForCanvas) {
@@ -830,36 +1140,19 @@ void KisMainWindow::showView(KisView *imageView, QMdiSubWindow *subwin)
             imageView->show();
         }
 
-        /**
-         * Hack alert!
-         *
-         * Here we explicitly request KoToolManager to Q_EMIT all the tool
-         * activation signals, to reinitialize the tool options docker.
-         *
-         * That is needed due to a design flaw we have in the
-         * initialization procedure.  The tool in the KoToolManager is
-         * initialized in KisView::setViewManager() calls, which
-         * happens early enough. During this call the tool manager
-         * requests KoCanvasControllerWidget to Q_EMIT the signal to
-         * update the widgets in the tool docker. *But* at that moment
-         * of time the view is not yet connected to the main window,
-         * because it happens in KisViewManager::setCurrentView a bit
-         * later. This fact makes the widgets updating signals be lost
-         * and never reach the tool docker.
-         *
-         * So here we just explicitly call the tool activation stub.
-         */
+        // Enable 144Hz touch/stylus gesture filtering & palm rejection on the canvas widget
+        if (imageView->canvasBase() && imageView->canvasBase()->canvasWidget()) {
+            QWidget *canvasWidget = imageView->canvasBase()->canvasWidget();
+            canvasWidget->setAttribute(Qt::WA_AcceptTouchEvents, true);
+            canvasWidget->installEventFilter(this);
+        }
 
         d->viewManager->toolManager()->initializeCurrentToolForCanvas();
 
-        // No, no, no: do not try to call this _before_ the show() has
-        // been called on the view; only when that has happened is the
-        // opengl context active, and very bad things happen if we tell
-        // the dockers to update themselves with a view if the opengl
-        // context is not active.
         setActiveView(imageView);
 
         updateWindowMenu();
+        slotUpdateBrocreateOverlayGeometry();
     } else {
         unsetActiveView();
     }
@@ -892,15 +1185,9 @@ void KisMainWindow::slotPreferences()
         KisConfigNotifier::instance()->notifyPixelGridModeChanged();
         KisImageConfigNotifier::instance()->notifyConfigChanged();
 
-        // XXX: should this be changed for the views in other windows as well?
         Q_FOREACH (QPointer<KisView> koview, KisPart::instance()->views()) {
             KisViewManager *view = qobject_cast<KisViewManager*>(koview);
             if (view) {
-                // Update the settings for all nodes -- they don't query
-                // KisConfig directly because they need the settings during
-                // compositing, and they don't connect to the config notifier
-                // because nodes are not QObjects (because only one base class
-                // can be a QObject).
                 KisNode* node = dynamic_cast<KisNode*>(view->image()->rootLayer().data());
                 if (node) {
                     node->updateSettings();
@@ -935,6 +1222,7 @@ void KisMainWindow::updateTheme()
     }
 
     customizeTabBar();
+    applyBrocreateDarkTheme();
 
     // Update toolbars
     {
@@ -966,11 +1254,9 @@ void KisMainWindow::slotThemeChanged()
     // Make the other top level windows update as well
     Q_FOREACH (QWidget* topLevelWidget, qApp->topLevelWidgets()) {
         if (topLevelWidget == this) {
-            // Skip if the current top level widget is this window
             continue;
         }
         if (topLevelWidget->isHidden()) {
-            // Skip unwanted top level widgets like menus, dropdowns, tooltips, etc.
             continue;
         }
         KisMainWindow *topLevelMainWindow = qobject_cast<KisMainWindow*>(topLevelWidget);
@@ -997,9 +1283,6 @@ void KisMainWindow::slotThemeChanged()
 
 void KisMainWindow::customizeTabBar()
 {
-    // update MDI area theme
-    // Tab close button override
-    // just switch this icon out for all OSs so it is easier to see
     QString closeButtonImageUrl;
     QString closeButtonHoverColor;
     if (KisIconUtils::useDarkIcons()) {
@@ -1046,7 +1329,7 @@ void KisMainWindow::setCanvasDetached(bool detach)
 {
 #ifdef Q_OS_ANDROID
     if (detach) {
-        QMessageBox::warning(this, i18nc("@title:window", "Krita"),
+        QMessageBox::warning(this, i18nc("@title:window", "Brocreate"),
                              "Detach Canvas is unsupported on Android");
     }
 #else
@@ -1116,9 +1399,9 @@ bool KisMainWindow::openDocument(const QString &path, OpenFlags flags)
 
     if (!QFile(path).exists()) {
         if (!(flags & BatchMode)) {
-            QMessageBox::critical(qApp->activeWindow(), i18nc("@title:window", "Krita"), i18n("The file %1 does not exist.", path));
+            QMessageBox::critical(qApp->activeWindow(), i18nc("@title:window", "Brocreate"), i18n("The file %1 does not exist.", path));
         }
-        KisRecentFilesManager::instance()->remove(QUrl::fromLocalFile(path)); //remove the file from the recent-opened-file-list
+        KisRecentFilesManager::instance()->remove(QUrl::fromLocalFile(path));
         return false;
     }
     return openDocumentInternal(path, flags);
@@ -1142,7 +1425,6 @@ bool KisMainWindow::openDocumentInternal(const QString &path, OpenFlags flags)
     connect(newdoc, SIGNAL(canceled(QString)), this, SLOT(slotLoadCanceled(QString)));
 
     KisDocument::OpenFlags openFlags = KisDocument::None;
-    // XXX: Why this duplication of OpenFlags...
     if (flags & RecoveryFile) {
         openFlags |= KisDocument::RecoveryFile;
     }
@@ -1203,15 +1485,6 @@ KisView* KisMainWindow::addViewAndNotifyLoadingCompleted(KisDocument *document,
     Q_EMIT guiLoadingFinished();
 
 #ifdef Q_OS_ANDROID
-    // HACK: When opening documents on Android, the main window sometimes fails
-    // to update until the application is shunted to the background and brought
-    // back or the menu bar is fiddled with. Flickering the window fixes this.
-    // Having a docker that uses QML somehow also fixes this, so this hack is
-    // gone again in 5.3 with the introduction of the text properties docker.
-    // UNHACK: But not on Xiaomi devices! There flickering the window makes it
-    // sorta exit fullscreen, adding black bars at the top and bottom. Just
-    // opening a document seems to work fine on these devices though, it delays
-    // for a moment then displays fine, so just skip this there I guess.
     if (!KisAndroidUtils::looksLikeXiaomiDevice()) {
         slotFlashWindowHack();
     }
@@ -1260,7 +1533,7 @@ void KisMainWindow::slotSaveCanceled(const QString &errMsg)
 {
     if (!errMsg.isEmpty()) {   // empty when cancelled by user
         KisUsageLogger::log(QString("Saving cancelled. Error:").arg(errMsg));
-        QMessageBox::critical(this, i18nc("@title:window", "Krita"), errMsg);
+        QMessageBox::critical(this, i18nc("@title:window", "Brocreate"), errMsg);
     }
     else {
         KisUsageLogger::log(QString("Saving cancelled by the user."));
@@ -1338,13 +1611,6 @@ bool KisMainWindow::saveDocument(KisDocument *document, bool saveas, bool isExpo
         return true;
     }
 
-    /**
-     * Make sure that we cannot enter this method twice!
-     *
-     * The lower level functions may call processEvents() so
-     * double-entry is quite possible to achieve. Here we try to lock
-     * the mutex, and if it is failed, just cancel saving.
-     */
     std::unique_lock<QMutex> l(d->savingEntryMutex, std::try_to_lock);
     if (!l.owns_lock()) return false;
 
@@ -1357,7 +1623,7 @@ bool KisMainWindow::saveDocument(KisDocument *document, bool saveas, bool isExpo
     }
     else if (dlg.result() == KisDelayedSaveDialog::Ignored) {
         QMessageBox::critical(qApp->activeWindow(),
-                              i18nc("@title:window", "Krita"),
+                              i18nc("@title:window", "Brocreate"),
                               i18n("You are saving a file while the image is "
                                    "still rendering. The saved file may be "
                                    "incomplete or corrupted.\n\n"
@@ -1377,7 +1643,7 @@ bool KisMainWindow::saveDocument(KisDocument *document, bool saveas, bool isExpo
     }
 
     QFile target(document->path());
-    if (!target.exists()) { // Possible when file is moved/unmounted during Krita session.
+    if (!target.exists()) { // Possible when file is moved/unmounted during Brocreate session.
         saveas = true;
     }
 
@@ -1395,13 +1661,9 @@ bool KisMainWindow::saveDocument(KisDocument *document, bool saveas, bool isExpo
     if (!mimeFilter.contains(oldMimeFormat)) {
         dbgUI << "KisMainWindow::saveDocument no export filter for" << oldMimeFormat;
 
-        // --- don't setOutputMimeType in case the user cancels the Save As
-        // dialog and then tries to just plain Save ---
-
-        // suggest a different filename extension (yes, we fortunately don't all live in a world of magic :))
         QString suggestedFilename = QFileInfo(suggestedURL.toLocalFile()).completeBaseName();
 
-        if (!suggestedFilename.isEmpty()) {  // ".kra" looks strange for a name
+        if (!suggestedFilename.isEmpty()) {
             suggestedFilename = suggestedFilename + "." + KisMimeDatabase::suffixesForMimeType(KIS_MIME_TYPE).first();
             suggestedURL = suggestedURL.adjusted(QUrl::RemoveFilename);
             suggestedURL.setPath(suggestedURL.path() + suggestedFilename);
@@ -1414,62 +1676,45 @@ bool KisMainWindow::saveDocument(KisDocument *document, bool saveas, bool isExpo
     bool ret = false;
 
     if (document->path().isEmpty() || isExporting || saveas) {
-        // if you're just File/Save As'ing to change filter options you
-        // don't want to be reminded about overwriting files etc.
         bool justChangingFilterOptions = false;
 
         KoFileDialog dialog(this, KoFileDialog::SaveFile, "SaveAs");
         dialog.setCaption(isExporting ? i18n("Exporting") : i18n("Saving As"));
 
-        //qDebug() << ">>>>>" << isExporting << d->lastExportLocation << d->lastExportedFormat << QString::fromLatin1(document->mimeType());
-
         if (isExporting && !d->lastExportLocation.isEmpty() && !d->lastExportLocation.contains(QDir::tempPath())) {
 
-            // Use the location where we last exported to, if it's set, as the opening location for the file dialog
             QString proposedPath = QFileInfo(d->lastExportLocation).absolutePath();
-            // If the document doesn't have a filename yet, use the title
             QString proposedFileName = suggestedURL.isEmpty() ? document->documentInfo()->aboutInfo("title") :  QFileInfo(suggestedURL.toLocalFile()).completeBaseName();
-            // Use the last mimetype we exported to by default
             QString proposedMimeType =  d->lastExportedFormat.isEmpty() ? "" : d->lastExportedFormat;
             QString proposedExtension = KisMimeDatabase::suffixesForMimeType(proposedMimeType).first().remove("*,");
 
-            // Set the default dir: this overrides the one loaded from the config file, since we're exporting and the lastExportLocation is not empty
             dialog.setDefaultDir(proposedPath + "/" + proposedFileName + "." + proposedExtension, true);
             dialog.setMimeTypeFilters(mimeFilter, proposedMimeType);
         }
-        else { 
-            //This section only runs when the user haven't exported yet during the session, behavior set in the File Handling, Default MimeType setting.
+        else {
             KisConfig cfg(true);
             QByteArray default_mime_type = cfg.exportMimeType(false).toUtf8();
             QString proposedMimeType = QString::fromLatin1(default_mime_type);
 
-            // Get the last used location for saving
             KConfigGroup group =  KSharedConfig::openConfig()->group("File Dialogs");
             QString proposedPath = group.readEntry("SaveAs", "");
-            // if that is empty, get the last used location for loading
             if (proposedPath.isEmpty()) {
                 proposedPath = group.readEntry("OpenDocument", "");
             }
-            // If that is empty, too, use the Pictures location.
             if (proposedPath.isEmpty()) {
                 proposedPath = QStandardPaths::writableLocation(QStandardPaths::PicturesLocation);
             }
-            // But only use that if the suggestedUrl, that is, the document's own url is empty, otherwise
-            // open the location where the document currently is.
 
-            //For if the user picked All Files Supported as the default, where there would not be an extension
             if(default_mime_type == "all/mime"){
                 dialog.setDefaultDir(suggestedURL.isEmpty() ? proposedPath : proposedPath + "/" + QFileInfo(suggestedURL.toLocalFile()).completeBaseName(), true);
             }
 
             if (default_mime_type != "all/mime" && !default_mime_type.isEmpty()) {
                 QString proposedExtension = KisMimeDatabase::suffixesForMimeType(proposedMimeType).first().remove("*,");
-                //This line is responsible for setting filename, which also manipulates filters.
                 dialog.setDefaultDir(suggestedURL.isEmpty() ? proposedPath :  proposedPath + "/" + QFileInfo(suggestedURL.toLocalFile()).completeBaseName() + "." + proposedExtension, true);
             }
 
             if (!isExporting) {
-                // If Saving, use the document's mimetype, or if that is empty, kra, which is the safest.
                 dialog.setDefaultDir(suggestedURL.isEmpty() ? proposedPath : suggestedURL.toLocalFile(), true);
                 default_mime_type = document->mimeType().isEmpty() ? nativeFormat : document->mimeType();
             }
@@ -1509,7 +1754,6 @@ bool KisMainWindow::saveDocument(KisDocument *document, bool saveas, bool isExpo
 
             bool wantToSave = true;
 
-            // don't change this line unless you know what you're doing :)
             if (!justChangingFilterOptions) {
                 if (!document->isNativeFormat(outputFormat))
                     wantToSave = true;
@@ -1534,18 +1778,15 @@ bool KisMainWindow::saveDocument(KisDocument *document, bool saveas, bool isExpo
                     }
                 }
 
-            }   // if (wantToSave)  {
+            }
             else
                 ret = false;
-        }   // if (bOk) {
+        }
         else
             ret = false;
     } else { // saving
-        // We cannot "export" into the currently
-        // opened document. We are not Gimp.
         KIS_ASSERT_RECOVER_NOOP(!isExporting);
 
-        // be sure document has the correct outputMimeType!
         if (document->isModified()) {
             ret = document->save(true, 0);
         }
@@ -1601,8 +1842,6 @@ void KisMainWindow::closeEvent(QCloseEvent *e)
     QList<QMdiSubWindow*> childrenList = d->mdiArea->subWindowList();
 
     if (childrenList.isEmpty()) {
-        // TODO: that assignment looks really suspicious, because `e`
-        // is destroyed right after the exit of this function
         d->deferredClosingEvent = e;
         d->canvasWindow->close();
     } else {
@@ -1623,12 +1862,9 @@ void KisMainWindow::saveWindowSettings()
     }
 
     if (!d->activeView || d->activeView->document()) {
-
-        // Save toolbar position into the config file of the app, under the doc's component name
         KConfigGroup group = d->windowStateConfig;
         saveMainWindowSettings(group);
 
-        // Save state of dock widgets
         for (QMap<QString, QDockWidget*>::const_iterator i = d->dockWidgetsMap.constBegin();
              i != d->dockWidgetsMap.constEnd(); ++i) {
             if (i.value()->widget()) {
@@ -1646,7 +1882,7 @@ void KisMainWindow::saveWindowSettings()
     }
 
     KSharedConfig::openConfig()->sync();
-    resetAutoSaveSettings(); // Don't let KisKMainWindow override the good stuff we wrote down
+    resetAutoSaveSettings();
 
 }
 
@@ -1654,6 +1890,7 @@ void KisMainWindow::resizeEvent(QResizeEvent * e)
 {
     d->windowSizeDirty = true;
     KXmlGuiWindow::resizeEvent(e);
+    slotUpdateBrocreateOverlayGeometry();
 }
 
 
@@ -1677,15 +1914,17 @@ bool KisMainWindow::windowsLayoutSavingAllowed() const
 
 void KisMainWindow::showEvent(QShowEvent *event)
 {
-    // we're here because, we need to make sure everything (dockers, toolbars etc) is loaded and ready before
-    // we can hide it.
     if (!event->spontaneous()) {
         setMainWindowLayoutForCurrentMainWidget(d->widgetStack->currentIndex(), false);
     }
+    if (menuBar()) {
+        menuBar()->setVisible(false);
+    }
+    if (statusBar()) {
+        statusBar()->hide();
+    }
+    slotUpdateBrocreateOverlayGeometry();
 #ifdef Q_OS_ANDROID
-    // The user can conceivably purchase a product from the splash screen while
-    // Krita is still loading. In that case, the "pending" flag will be set. The
-    // dialog in question will clear the flag.
     KisAndroidDonations *androidDonations = KisAndroidDonations::instance();
     if (androidDonations && androidDonations->isShowDonationManagementDialogPending()) {
         QTimer::singleShot(0, this, &KisMainWindow::slotShowDonationManagementDialog);
@@ -1696,29 +1935,32 @@ void KisMainWindow::showEvent(QShowEvent *event)
 
 void KisMainWindow::setMainWindowLayoutForCurrentMainWidget(int widgetIndex, bool widgetIndexChanged)
 {
-
     if (widgetIndex == 0) {
         if (widgetIndexChanged) {
-            /// save the state of the window which existed up-to now (this is before we stop auto-saving).
-            ///
-            /// saving should happen if the call s has come from a real state change, but not from
-            /// on-startup initialization
-
             if (d->mdiArea->subWindowList().isEmpty()) {
-                /**
-                 * When closing the latest subwindow we should restore the
-                 * canvas-only mode to save stuff properly
-                 */
                 saveWindowState(true);
             } else {
                 saveMainWindowSettings(d->windowStateConfig);
             }
         }
         adjustLayoutForWelcomePage();
+        updateBrocreateFloatingVisibility(false);
     }
     else {
         setAutoSaveSettings(d->windowStateConfig, false);
-        statusBar()->setVisible(KisConfig(true).showStatusBar());
+        if (menuBar()) {
+            menuBar()->setVisible(false);
+        }
+        if (statusBar()) {
+            statusBar()->setVisible(false);
+        }
+        QList<QToolBar *> toolbars = findChildren<QToolBar *>();
+        for (QToolBar *toolbar : toolbars) {
+            toolbar->hide();
+        }
+        arrangeBrocreateStudioDocks(d->animationLayoutActive);
+        updateBrocreateFloatingVisibility(!d->canvasOnlyOverlayHidden);
+        slotUpdateBrocreateOverlayGeometry();
     }
 
     QList<QAction *> actions = d->dockWidgetMenu->menu()->actions();
@@ -1732,19 +1974,18 @@ void KisMainWindow::setMainWindowLayoutForCurrentMainWidget(int widgetIndex, boo
 
 void KisMainWindow::adjustLayoutForWelcomePage()
 {
-    // This makes sure we don't save window state when we're in welcome page mode, because all the dockers
-    // etc are hidden while the user is here.
     resetAutoSaveSettings();
 
     toggleDockersVisibility(false, true);
+    if (menuBar()) {
+        menuBar()->setVisible(false);
+    }
     if (statusBar()) {
         statusBar()->hide();
     }
     QList<QToolBar *> toolbars = findChildren<QToolBar *>();
     for (QToolBar *toolbar : toolbars) {
-        if (toolbar->objectName() != "mainToolBar") {
-            toolbar->hide();
-        }
+        toolbar->hide();
     }
 }
 
@@ -1770,6 +2011,29 @@ void KisMainWindow::setActiveView(KisView* view)
 
     KisWindowLayoutManager::instance()->activeDocumentChanged(view->document());
 
+    if (d->viewManager && d->viewManager->canvasResourceProvider()) {
+        d->activeViewConnections.addConnection(
+            d->viewManager->canvasResourceProvider()->resourceManager(),
+            SIGNAL(canvasResourceChanged(int,QVariant)),
+            this,
+            SLOT(slotBrocreateCanvasResourceChanged(int,QVariant)));
+        updateBrocreateColorSwatch();
+        d->updatingFromResource = true;
+        if (d->opacityPill) {
+            const qreal op = d->viewManager->canvasResourceProvider()->opacity();
+            d->opacityPill->setNormalizedValue(op);
+            d->opacityPill->setDisplayText(QString("%1%").arg(qRound(op * 100.0)));
+        }
+        if (d->brushSizePill) {
+            const qreal sz = d->viewManager->canvasResourceProvider()->resourceManager()->resource(KoCanvasResource::Size).toDouble();
+            const qreal effectiveSz = sz > 0.1 ? sz : 5.0;
+            const qreal norm = qBound<qreal>(0.0, std::log(effectiveSz) / std::log(500.0), 1.0);
+            d->brushSizePill->setNormalizedValue(norm);
+            d->brushSizePill->setDisplayText(QString::number(effectiveSz, 'f', 2) + QStringLiteral(" px"));
+        }
+        d->updatingFromResource = false;
+    }
+
     Q_EMIT activeViewChanged();
 }
 
@@ -1785,7 +2049,7 @@ void KisMainWindow::dragMove(QDragMoveEvent * event)
     QTabBar *tabBar = d->findTabBarHACK();
 
     if (!tabBar && d->mdiArea->viewMode() == QMdiArea::TabbedView) {
-        qWarning() << "WARNING!!! Cannot find QTabBar in the main window! Looks like Qt has changed behavior. Drag & Drop between multiple tabs might not work properly (tabs will not switch automatically)!";
+        qWarning() << "WARNING!!! Cannot find QTabBar in the main window!";
     }
 
     if (tabBar && tabBar->isVisible()) {
@@ -1823,8 +2087,6 @@ void KisMainWindow::showWelcomeScreen(bool show)
     const int currentIndex = show ? 0 : 1;
     if (d->widgetStack->currentIndex() != currentIndex) {
         setUpdatesEnabled(false);
-        // These have to be done in different sequence to avoid graphical
-        // layout glitch during the switch.
         if (show) {
             setMainWindowLayoutForCurrentMainWidget(currentIndex, true);
             d->widgetStack->setCurrentIndex(currentIndex);
@@ -1876,7 +2138,7 @@ void KisMainWindow::slotFileOpenRecent(const QUrl &url)
 
 void KisMainWindow::slotFileSave()
 {
-    if (saveDocument(d->activeView->document(), false, false,false)) {
+    if (d->activeView && saveDocument(d->activeView->document(), false, false, false)) {
         Q_EMIT documentSaved();
     }
 }
@@ -1893,20 +2155,20 @@ void KisMainWindow::slotChangeInterfaceScale()
 
 void KisMainWindow::slotFileSaveAs()
 {
-    if (saveDocument(d->activeView->document(), true, false,false)) {
+    if (d->activeView && saveDocument(d->activeView->document(), true, false, false)) {
         Q_EMIT documentSaved();
     }
 }
 
 void KisMainWindow::slotExportFile()
 {
-    if (saveDocument(d->activeView->document(), true, true,false)) {
+    if (d->activeView && saveDocument(d->activeView->document(), true, true, false)) {
         Q_EMIT documentSaved();
     }
 }
 void KisMainWindow::slotExportAdvance()
 {
-    if (saveDocument(d->activeView->document(), true, true,true)) {
+    if (d->activeView && saveDocument(d->activeView->document(), true, true, true)) {
         Q_EMIT documentSaved();
     }
 }
@@ -1918,17 +2180,11 @@ void KisMainWindow::slotShowSessionManager() {
 #ifdef Q_OS_ANDROID
 void KisMainWindow::slotShowDonationManagementDialog()
 {
-    // Don't show the donation management dialog on top of another dialog
-    // that may have triggered a donation flow, such as the bundle manager.
     QWidget *win = qApp->activeWindow();
     if (win && !qobject_cast<KisMainWindow *>(win) && (win->isModal() || win->windowModality() != Qt::NonModal)) {
         return;
     }
 
-    // We don't use `exec` here because the purchase stuff runs in Android's
-    // event loop, so it's legitimately possible that we get hit by another
-    // request to show the donation management dialog while it's already up
-    // and it's more convenient for the dialog to handle the deduplication.
     QString objectName = QStringLiteral("kisdonationmanagementdialog");
     KisDonationManagementDialog *dlg = findChild<KisDonationManagementDialog *>(objectName, Qt::FindDirectChildrenOnly);
     if (dlg) {
@@ -1979,9 +2235,7 @@ const KConfigGroup &KisMainWindow::windowStateConfig() const
 
 void KisMainWindow::saveWindowState(bool restoreNormalState)
 {
-    // We don't need to save welcome page's layout
     if (d->widgetStack->currentIndex() == 0) {
-        // TODO(sh_zam): We should still save position/geometry, right?
         return;
     }
 
@@ -1995,13 +2249,9 @@ void KisMainWindow::saveWindowState(bool restoreNormalState)
         d->windowStateConfig.writeEntry("ko_geometry", saveGeometry().toBase64());
         d->windowStateConfig.writeEntry("State", saveState().toBase64());
 
-        // if the dockers are hidden at this time, save their state.
         if (!d->toggleDockers->isChecked()) {
             restoreState(d->dockerStateBeforeHiding);
         }
-
-        statusBar()->setVisible(true);
-        menuBar()->setVisible(true);
 
         saveWindowSettings();
 
@@ -2014,12 +2264,11 @@ void KisMainWindow::saveWindowState(bool restoreNormalState)
 bool KisMainWindow::restoreWorkspaceState(const QByteArray &state)
 {
     QByteArray oldState = saveState();
-    const bool showTitlebars = KisConfig(false).showDockerTitleBars();
+    const bool showTitlebars = false;
 
-    // needed because otherwise the layout isn't correctly restored in some situations
     Q_FOREACH (QDockWidget *dock, dockWidgets()) {
         if (dock) {
-            dock->setProperty("Locked", false); // Unlock invisible dockers
+            dock->setProperty("Locked", false);
             dock->toggleViewAction()->setEnabled(true);
             dock->hide();
             if (dock->titleBarWidget() && !dock->titleBarWidget()->inherits("KisUtilityTitleBar")) {
@@ -2081,18 +2330,7 @@ void KisMainWindow::openCommandBar()
     }
 
     d->commandBar->updateBar(actionCollections, actionsCount);
-
-    // The following line is needed to work around input method not working
-    // on Windows.
-    // See https://bugs.kde.org/show_bug.cgi?id=395598
-    // and https://bugs.kde.org/show_bug.cgi?id=438122
     d->commandBar->activateWindow();
-
-    // The following line is present in Kate's version and was ported over
-    // but I am sceptical of its use. I worry that it may subtly cause other
-    // issues, and since the command bar appears to work fine without it, I
-    // believe it may be better to leave it out.  -- Alvin
-    // centralWidget()->setFocusProxy(d->commandBar);
 }
 
 void KisMainWindow::slotStoragesWarning(const QString &/*location*/)
@@ -2104,7 +2342,7 @@ void KisMainWindow::slotStoragesWarning(const QString &/*location*/)
 
     if (!checkPaintOpAvailable()) {
         warning += i18n("\nThere are no brush presets available. Please enable a bundle that has presets before continuing.\n");
-        QMessageBox::critical(this, i18nc("@title:window", "Krita"), warning);
+        QMessageBox::critical(this, i18nc("@title:window", "Brocreate"), warning);
 
         QAction *action = actionCollection()->action("manage_bundles");
         if (action) {
@@ -2113,7 +2351,7 @@ void KisMainWindow::slotStoragesWarning(const QString &/*location*/)
     }
 
     if (!checkActiveBundlesAvailable()) {
-        QMessageBox::warning(this, i18nc("@title:window", "Krita"), warning + i18n("\nOnly your local resources are available."));
+        QMessageBox::warning(this, i18nc("@title:window", "Brocreate"), warning + i18n("\nOnly your local resources are available."));
     }
 
 }
@@ -2124,7 +2362,7 @@ bool KisMainWindow::restoreWorkspace(KoResourceSP res)
 
     bool success = restoreWorkspaceState(workspace->dockerState());
 
-    const bool showTitlebars = KisConfig(false).showDockerTitleBars();
+    const bool showTitlebars = false;
     Q_FOREACH (QDockWidget *dock, dockWidgets()) {
         if (dock->titleBarWidget() && !dock->titleBarWidget()->inherits("KisUtilityTitleBar")) {
             dock->titleBarWidget()->setVisible(showTitlebars || dock->isFloating());
@@ -2146,11 +2384,9 @@ QByteArray KisMainWindow::borrowWorkspace(KisMainWindow *other)
 
     if (!d->workspaceBorrowedBy.isNull()) {
         if (other->id() == d->workspaceBorrowedBy) {
-            // We're swapping our original workspace back
             d->workspaceBorrowedBy = QUuid();
             return currentWorkspace;
         } else {
-            // Get our original workspace back before swapping with a third window
             KisMainWindow *borrower = KisPart::instance()->windowById(d->workspaceBorrowedBy);
             if (borrower) {
                 QByteArray originalLayout = borrower->borrowWorkspace(this);
@@ -2182,7 +2418,7 @@ KisViewManager *KisMainWindow::viewManager() const
 
 void KisMainWindow::slotDocumentInfo()
 {
-    if (!d->activeView->document())
+    if (!d->activeView || !d->activeView->document())
         return;
 
     KoDocumentInfo *docInfo = d->activeView->document()->documentInfo();
@@ -2217,9 +2453,6 @@ bool KisMainWindow::slotFileCloseAll()
 
 void KisMainWindow::slotFileQuit()
 {
-    // Do not close while KisMainWindow has the savingEntryMutex locked, bug409395.
-    // After the background saving job is initiated, KisDocument blocks closing
-    // while it saves itself.
     if (hackIsSaving()) {
         return;
     }
@@ -2247,12 +2480,12 @@ void KisMainWindow::importAnimation()
                 !document->fileBatchMode() ? viewManager()->createUnthreadedUpdater(i18n("Import frames")) : 0;
         KisAnimationImporter importer(document->image(), updater);
         int isAscending = dlg.isAscending();
-        KisImportExportErrorCode status = importer.import(files, firstFrame, step, autoAddHoldframes, startFrom1, isAscending);  // modify here, add a flag
+        KisImportExportErrorCode status = importer.import(files, firstFrame, step, autoAddHoldframes, startFrom1, isAscending);
 
         if (!status.isOk() && !status.isInternalError()) {
             QString msg = status.errorMessage();
             if (!msg.isEmpty())
-                QMessageBox::critical(qApp->activeWindow(), i18nc("@title:window", "Krita"), i18n("Could not finish import animation:\n%1", msg));
+                QMessageBox::critical(qApp->activeWindow(), i18nc("@title:window", "Brocreate"), i18n("Could not finish import animation:\n%1", msg));
         }
         activeView()->canvasBase()->refetchDataFromImage();
     }
@@ -2260,7 +2493,6 @@ void KisMainWindow::importAnimation()
 
 void KisMainWindow::importVideoAnimation()
 {
-    // Importing video requires ffmpeg, which is not available on Android.
 #ifndef Q_OS_ANDROID
     KisDocument *document;
     KisDlgImportVideoAnimation dlg(this, activeView());
@@ -2272,7 +2504,7 @@ void KisMainWindow::importVideoAnimation()
         QStringList documentInfoList = dlg.documentInfo();
 
         if (renderedFrames.isEmpty()) return;
-        
+
         dbgFile << "Animation Import options: " << documentInfoList;
 
         int firstFrame = 0;
@@ -2313,7 +2545,7 @@ void KisMainWindow::importVideoAnimation()
             KoColor bgColor(qc, cs);
 
             if (!document->newImage(name, width, height, cs, bgColor, KisConfig::RASTER_LAYER, 1, "", double(resolution / 72) )) {
-                QMessageBox::critical(qApp->activeWindow(), i18nc("@title:window", "Krita"), i18n("Failed to create new document. Animation import aborted."));
+                QMessageBox::critical(qApp->activeWindow(), i18nc("@title:window", "Brocreate"), i18n("Failed to create new document. Animation import aborted."));
                 return;
             }
 
@@ -2332,7 +2564,7 @@ void KisMainWindow::importVideoAnimation()
         if (!status.isOk() && !status.isInternalError()) {
             QString msg = status.errorMessage();
             if (!msg.isEmpty())
-                QMessageBox::critical(qApp->activeWindow(), i18nc("@title:window", "Krita"), i18n("Could not finish import animation:\n%1", msg));
+                QMessageBox::critical(qApp->activeWindow(), i18nc("@title:window", "Brocreate"), i18n("Could not finish import animation:\n%1", msg));
         }
 
         activeView()->canvasBase()->refetchDataFromImage();
@@ -2405,25 +2637,17 @@ void KisMainWindow::slotNewToolbarConfig()
     KisKXMLGUIFactory *factory = guiFactory();
     Q_UNUSED(factory);
 
-    // Check if there's an active view
     if (!d->activeView)
         return;
 
     plugActionList("toolbarlist", d->toolbarList);
 
-    /**
-     * First we should apply icon overrides, and only after that we
-     * should update the layout, since the function checks for the
-     * presence of the icons in the action.
-     */
     applyActionIconOverridesFromLocalXML();
     applyToolBarLayout();
 }
 
 void KisMainWindow::slotToolbarToggled(bool toggle)
 {
-    //dbgUI <<"KisMainWindow::slotToolbarToggled" << sender()->name() <<" toggle=" << true;
-    // The action (sender) and the toolbar have the same name
     KisToolBar * bar = toolBar(sender()->objectName());
     if (bar) {
         if (toggle) {
@@ -2443,10 +2667,6 @@ void KisMainWindow::slotToolbarToggled(bool toggle)
 void KisMainWindow::viewFullscreen(bool fullScreen)
 {
 #ifdef Q_OS_ANDROID
-    // Full-screening on Android applies to the entire application, not this
-    // window in particular. Qt tries to paper over that matter, but it causes
-    // some pretty horrid flickering when the main window gets hidden. We just
-    // talk to the Android interface directly to get around that.
     KisAndroidUtils::setFullScreen(fullScreen);
     d->fullScreenMode->setChecked(fullScreen);
 #else
@@ -2454,9 +2674,9 @@ void KisMainWindow::viewFullscreen(bool fullScreen)
     cfg.setFullscreenMode(fullScreen);
 
     if (fullScreen) {
-        setWindowState(windowState() | Qt::WindowFullScreen);   // set
+        setWindowState(windowState() | Qt::WindowFullScreen);
     } else {
-        setWindowState(windowState() & ~Qt::WindowFullScreen);   // reset
+        setWindowState(windowState() & ~Qt::WindowFullScreen);
     }
     d->fullScreenMode->setChecked(isFullScreen());
 #endif
@@ -2465,15 +2685,13 @@ void KisMainWindow::viewFullscreen(bool fullScreen)
 QDockWidget* KisMainWindow::createDockWidget(KoDockFactoryBase* factory)
 {
     QDockWidget* dockWidget = 0;
-    const bool showTitlebars = KisConfig(false).showDockerTitleBars();
+    const bool showTitlebars = false;
 
     if (!d->dockWidgetsMap.contains(factory->id())) {
         KisScopedPerformanceLogger perfLog(QStringLiteral("KisMainWindow::createDockWidget(%1)").arg(factory->id()));
         dockWidget = factory->createDockWidget();
         KAcceleratorManager::setNoAccel(dockWidget);
 
-        // It is quite possible that a dock factory cannot create the dock; don't
-        // do anything in that case.
         if (!dockWidget) {
             warnKrita << "Could not create docker for" << factory->id();
             return 0;
@@ -2481,7 +2699,6 @@ QDockWidget* KisMainWindow::createDockWidget(KoDockFactoryBase* factory)
 
         KoDockWidgetTitleBar *titleBar = dynamic_cast<KoDockWidgetTitleBar*>(dockWidget->titleBarWidget());
 
-        // Check if the dock widget is supposed to be collapsible
         if (!dockWidget->titleBarWidget()) {
             titleBar = new KoDockWidgetTitleBar(dockWidget);
             dockWidget->setTitleBarWidget(titleBar);
@@ -2498,14 +2715,14 @@ QDockWidget* KisMainWindow::createDockWidget(KoDockFactoryBase* factory)
         dockWidget->setParent(this);
 
         if (dockWidget->widget() && dockWidget->widget()->layout())
-            dockWidget->widget()->layout()->setContentsMargins(1, 1, 1, 1);
+            dockWidget->widget()->layout()->setContentsMargins(4, 4, 4, 4);
 
         Qt::DockWidgetArea side = Qt::RightDockWidgetArea;
         bool visible = true;
 
         switch (factory->defaultDockPosition()) {
         case KoDockFactoryBase::DockTornOff:
-            dockWidget->setFloating(true); // position nicely?
+            dockWidget->setFloating(true);
             break;
         case KoDockFactoryBase::DockTop:
             side = Qt::TopDockWidgetArea; break;
@@ -2569,13 +2786,12 @@ void KisMainWindow::slotUpdateWidgetStyle()
      KisConfig cfg(true);
      QString themeFromConfig = cfg.widgetStyle();
 
-     Q_FOREACH (auto key, d->actionMap.keys()) { // find checked style to save to config
+     Q_FOREACH (auto key, d->actionMap.keys()) {
          if(d->actionMap.value(key)->isChecked()) {
             cfg.setWidgetStyle(key);
             qApp->setProperty(currentUnderlyingStyleNameProperty, key);
             qApp->setStyle(key);
 
-            // When switching to a style that uses system colors, reset the theme
 #ifndef Q_OS_HAIKU
             QString currentStyle = qApp->style()->objectName();
 #if (QT_VERSION < QT_VERSION_CHECK(6, 0, 0))
@@ -2640,6 +2856,7 @@ void KisMainWindow::toggleDockersVisibility(bool visible, bool onWelcomePage)
     else {
         restoreState(d->dockerStateBeforeHiding);
     }
+    QTimer::singleShot(0, this, SLOT(slotUpdateBrocreateOverlayGeometry()));
 }
 
 void KisMainWindow::subWindowActivated()
@@ -2655,15 +2872,6 @@ void KisMainWindow::subWindowActivated()
 
     setActiveSubWindow(d->mdiArea->activeSubWindow());
 
-    /**
-     * Qt has a weirdness, it has hardcoded shortcuts added to an action
-     * in the window menu. We need to reset the shortcuts for that menu
-     * to nothing, otherwise the shortcuts cannot be made configurable.
-     *
-     * See: https://bugs.kde.org/show_bug.cgi?id=352205
-     *      https://bugs.kde.org/show_bug.cgi?id=375524
-     *      https://bugs.kde.org/show_bug.cgi?id=398729
-     */
     QMdiSubWindow *subWindow = d->mdiArea->currentSubWindow();
     if (subWindow) {
         QMenu *menu = subWindow->systemMenu();
@@ -2681,9 +2889,6 @@ void KisMainWindow::subWindowActivated()
 
 void KisMainWindow::windowFocused()
 {
-    /**
-     * Notify selection manager so that it could update selection mask overlay
-     */
     if (viewManager() && viewManager()->selectionManager()) {
         viewManager()->selectionManager()->selectionChanged();
     }
@@ -2790,8 +2995,6 @@ void KisMainWindow::updateWindowMenu()
         workspace->setImage(layoutThumbnail());
         workspace->setValid(true);
 
-        // this line must happen before we save the workspace to resource folder or other places
-        // because it mostly just triggers palettes to be saved into the workspace
         d->viewManager->canvasResourceProvider()->notifySavingWorkspace(workspace);
         workspace->setValid(true);
 
@@ -2800,9 +3003,6 @@ void KisMainWindow::updateWindowMenu()
 
         KisResourceUserOperations::addResourceWithUserInput(this, workspace);
     });
-
-    // TODO: What to do about delete?
-    //    workspaceMenu->addAction(i18nc("@action:inmenu", "&Delete Workspace..."));
 
     menu->addSeparator();
     menu->addAction(d->close);
@@ -2840,10 +3040,9 @@ void KisMainWindow::updateWindowMenu()
 
     bool showMdiArea = windows.count( ) > 0;
     if (!showMdiArea) {
-        showWelcomeScreen(true); // see workaround in function in header
+        showWelcomeScreen(true);
     }
 
-    // enable/disable the toolbox docker if there are no documents open
     Q_FOREACH (QObject* widget, children()) {
         if (widget->inherits("QDockWidget")) {
             QDockWidget* dw = static_cast<QDockWidget*>(widget);
@@ -2878,11 +3077,9 @@ void KisMainWindow::setActiveSubWindow(QWidget *window)
         return;
     }
     QMdiSubWindow *subwin = qobject_cast<QMdiSubWindow *>(window);
-    //dbgKrita << "setActiveSubWindow();" << subwin << d->activeSubWindow;
 
     if (subwin && subwin != d->activeSubWindow) {
         KisView *view = qobject_cast<KisView *>(subwin->widget());
-        //dbgKrita << "\t" << view << activeView();
         if (view && view != activeView()) {
             setActiveView(view);
         }
@@ -2897,7 +3094,6 @@ void KisMainWindow::configChanged()
     KisConfig cfg(true);
     QMdiArea::ViewMode viewMode = (QMdiArea::ViewMode)cfg.readEntry<int>("mdi_viewmode", (int)QMdiArea::TabbedView);
     d->mdiArea->setViewMode(viewMode);
-    //Do it here to avoid the wrong icon briefly flashing
     customizeTabBar();
 
     Q_FOREACH (QMdiSubWindow *subwin, d->mdiArea->subWindowList()) {
@@ -2907,13 +3103,6 @@ void KisMainWindow::configChanged()
             subwin->setWindowState(Qt::WindowMaximized);
         }
 
-        /**
-         * Dirty workaround for a bug in Qt (checked on Qt 5.6.1):
-         *
-         * If you make a window "Show on top" and then switch to the tabbed mode
-         * the window will continue to be painted in its initial "mid-screen"
-         * position. It will persist here until you explicitly switch to its tab.
-         */
         if (viewMode == QMdiArea::TabbedView) {
             Qt::WindowFlags oldFlags = subwin->windowFlags();
             Qt::WindowFlags flags = oldFlags;
@@ -2937,18 +3126,8 @@ void KisMainWindow::configChanged()
 #endif
     d->actionManager()->updateGUI();
 
-    QString s = cfg.getMDIBackgroundColor();
-    KoColor c = KoColor::fromXML(s);
-    QBrush brush(c.toQColor());
-    d->mdiArea->setBackground(brush);
-
-    QString backgroundImage = cfg.getMDIBackgroundImage();
-    if (backgroundImage != "") {
-        QImage image(backgroundImage);
-        QBrush brush(image);
-        d->mdiArea->setBackground(brush);
-    }
-
+    // Enforce Brocreate canvas #0B0B0D backdrop
+    d->mdiArea->setBackground(QBrush(QColor("#0B0B0D")));
     d->mdiArea->update();
 
     qApp->setFont(KisUiFont::normalFont());
@@ -2973,9 +3152,8 @@ KisView* KisMainWindow::newView(QObject *document, QMdiSubWindow *subWindow)
 void KisMainWindow::newWindow()
 {
 #ifdef Q_OS_ANDROID
-    // Check if current mainwindow exists, just to be sure.
     if (KisPart::instance()->currentMainwindow()) {
-        QMessageBox::warning(this, i18nc("@title:window", "Krita"),
+        QMessageBox::warning(this, i18nc("@title:window", "Brocreate"),
                              "Creating a New Main Window is unsupported on Android");
         return;
     }
@@ -2995,10 +3173,8 @@ void KisMainWindow::closeCurrentWindow()
 
 void KisMainWindow::checkSanity()
 {
-    // print error if the lcms engine is not available
     if (!KoColorSpaceEngineRegistry::instance()->contains("icc")) {
-        // need to wait 1 event since exiting here would not work.
-        m_errorMessage = i18n("The Krita LittleCMS color management plugin is not installed. Krita will quit now.");
+        m_errorMessage = i18n("The Brocreate LittleCMS color management plugin is not installed. Brocreate will quit now.");
         m_dieOnError = true;
         QTimer::singleShot(0, this, SLOT(showErrorAndDie()));
         return;
@@ -3006,9 +3182,6 @@ void KisMainWindow::checkSanity()
 
     slotStoragesWarning();
 
-    // window is created signal (used in Python)
-    // there must be some asynchronous things happening in the constructor, because the window cannot
-    // be referenced until after this timeout is done
     Q_EMIT KisPart::instance()->sigMainWindowCreated();
 }
 
@@ -3023,6 +3196,7 @@ void KisMainWindow::showErrorAndDie()
 void KisMainWindow::showAboutApplication()
 {
     KisAboutApplication dlg(this);
+    dlg.setWindowTitle(i18n("About Brocreate"));
     dlg.exec();
 }
 
@@ -3030,7 +3204,6 @@ QPointer<KisView> KisMainWindow::activeKisView()
 {
     if (!d->mdiArea) return 0;
     QMdiSubWindow *activeSubWindow = d->mdiArea->activeSubWindow();
-    //dbgKrita << "activeKisView" << activeSubWindow;
     if (!activeSubWindow) return 0;
     return qobject_cast<KisView*>(activeSubWindow->widget());
 }
@@ -3067,8 +3240,6 @@ void KisMainWindow::createActions()
 {
     KisActionManager *actionManager = d->actionManager();
 
-
-
     actionManager->createStandardAction(KStandardAction::New, this, SLOT(slotFileNew()));
     actionManager->createStandardAction(KStandardAction::Open, this, SLOT(slotFileOpen()));
     actionManager->createStandardAction(KStandardAction::Quit, this, SLOT(slotFileQuit()));
@@ -3095,7 +3266,6 @@ void KisMainWindow::createActions()
     d->importAnimation  = actionManager->createAction("file_import_animation");
     connect(d->importAnimation, SIGNAL(triggered()), this, SLOT(importAnimation()));
 
-    // Importing video requires ffmpeg, which is not available on Android.
 #ifndef Q_OS_ANDROID
     d->importVideoAnimation = actionManager->createAction("file_import_video_animation");
     connect(d->importVideoAnimation, SIGNAL(triggered()), this, SLOT(importVideoAnimation()));
@@ -3122,8 +3292,6 @@ void KisMainWindow::createActions()
     d->exportFileAdvance  = actionManager->createAction("file_export_advanced");
     connect(d->exportFileAdvance, SIGNAL(triggered(bool)), this, SLOT(slotExportAdvance()));
 
-    /* The following entry opens the document information dialog.  Since the action is named so it
-        intends to show data this entry should not have a trailing ellipses (...).  */
     d->showDocumentInfo  = actionManager->createAction("file_documentinfo");
     connect(d->showDocumentInfo, SIGNAL(triggered(bool)), this, SLOT(slotDocumentInfo()));
 #ifndef Q_OS_HAIKU
@@ -3133,7 +3301,6 @@ void KisMainWindow::createActions()
     connect(this, SIGNAL(themeChanged()), d->welcomePage, SLOT(slotUpdateThemeColors()), Qt::UniqueConnection);
 #endif
     d->toggleDockers = actionManager->createAction("view_toggledockers");
-
 
     KisConfig(true).showDockers(true);
     d->toggleDockers->setChecked(true);
@@ -3150,13 +3317,13 @@ void KisMainWindow::createActions()
     setCanvasDetached(false);
 
     d->toggleDockerTitleBars = actionManager->createAction("view_toggledockertitlebars");
-    d->toggleDockerTitleBars->setChecked(KisConfig(false).showDockerTitleBars());
+    d->toggleDockerTitleBars->setChecked(false);
     connect(d->toggleDockerTitleBars, SIGNAL(toggled(bool)), SLOT(showDockerTitleBars(bool)));
 
     actionCollection()->addAction("settings_dockers_menu", d->dockWidgetMenu);
     actionCollection()->addAction("window", d->windowMenu);
 
-    actionCollection()->addAction("style_menu", d->styleMenu); // for widget styles: breeze, fusion, etc
+    actionCollection()->addAction("style_menu", d->styleMenu);
 
     d->mdiCascade = actionManager->createAction("windows_cascade");
     connect(d->mdiCascade, SIGNAL(triggered()), d->mdiArea, SLOT(cascadeSubWindows()));
@@ -3231,9 +3398,9 @@ void KisMainWindow::applyToolBarLayout()
 {
     Q_FOREACH (KisToolBar *toolBar, toolBars()) {
         toolBar->layout()->setSpacing(4);
-        toolBar->setStyleSheet("QToolBar { border: none }"); // has a border in "Fusion" style that people don't like
+        toolBar->setStyleSheet("QToolBar { border: none }");
+        toolBar->hide();
 
-        // Hide text for buttons with an icon in the toolbar
         Q_FOREACH (QAction *ac, toolBar->actions()){
             if (ac->icon().pixmap(QSize(1,1)).isNull() == false){
                 ac->setPriority(QAction::LowPriority);
@@ -3246,8 +3413,6 @@ void KisMainWindow::applyToolBarLayout()
 
 void KisMainWindow::initializeGeometry()
 {
-    // if the user didn's specify the geometry on the command line (does anyone do that still?),
-    // we first figure out some good default size and restore the x,y position. See bug 285804Z.
     KConfigGroup cfg = d->windowStateConfig;
     QByteArray geom = QByteArray::fromBase64(cfg.readEntry("ko_geometry", QByteArray()));
     if (!restoreGeometry(geom)) {
@@ -3258,11 +3423,8 @@ void KisMainWindow::initializeGeometry()
         quint32 w = 0;
         quint32 h = 0;
 
-        // Default size -- maximize on small screens, something useful on big screens
         const int deskWidth = desk.width();
         if (deskWidth > 1024) {
-            // a nice width, and slightly less than total available
-            // height to compensate for the window decs
             w = (deskWidth / 3) * 2;
             h = (desk.height() / 3) * 2;
         }
@@ -3278,7 +3440,6 @@ void KisMainWindow::initializeGeometry()
         setGeometry(geometry().x(), geometry().y(), w, h);
     }
 #ifdef Q_OS_ANDROID
-    // We handle full-screening differently on Android, see viewFullScreen.
     bool fullScreen = KisAndroidUtils::isInFullScreen();
 #else
     bool fullScreen = isFullScreen();
@@ -3315,24 +3476,18 @@ void KisMainWindow::orientationChanged()
     QScreen *screen = QGuiApplication::primaryScreen();
 
     for (QWindow* window: QGuiApplication::topLevelWindows()) {
-        // Android: we shouldn't transform Window managers independent of its child
         if ((window->type() == Qt::Popup)
             && (window->flags() & Qt::FramelessWindowHint) == 0
             && (window->geometry().topLeft() != QPoint(0, 0))) {
-            // We are using reversed values. Because geometry returned is not the updated
-            // one, but the previous one.
             int screenHeight = screen->geometry().width();
             int screenWidth = screen->geometry().height();
 
-            // scaling
             int new_x = (window->position().x() * screenWidth) / screenHeight;
             int new_y = (window->position().y() * screenHeight) / screenWidth;
 
-            // window width or height shouldn't change
             int winWidth = window->geometry().width();
             int winHeight = window->geometry().height();
 
-            // Try best to not let the window go beyond screen.
             if (new_x > screenWidth - winWidth) {
                 new_x = screenWidth - winWidth;
                 if (new_x < 0)
@@ -3366,12 +3521,6 @@ bool KisMainWindow::checkPaintOpAvailable()
     return (rserver->resourceCount() > 0);
 }
 
-// One action has only one icon override, local XML contains ActionIconOverrides like so:
-// <ActionIconOverrides>
-//    <Action name="erase_action" icon="wheel-sectors"/>
-//    <Action name="about_krita" icon="application-exit"/>
-// </ActionIconOverrides>
-// This function will rerender the actions with icons in UI (toolbars, shortcuts options etc.)
 void KisMainWindow::applyActionIconOverridesFromLocalXML()
 {
     QString xmlPath = KoResourcePaths::locateLocal("data", "krita5.xmlgui");
@@ -3405,8 +3554,902 @@ void KisMainWindow::applyActionIconOverridesFromLocalXML()
 
 void KisMainWindow::synchronizeDynamicActions()
 {
-    // Add all actions with a menu property to the main window
     KisActionManager::synchronizeDynamicActions(this->actionCollection()->actions(), this->menuBar()->actions());
+}
+
+// ============================================================================
+// BROCREATE TABLET UI, QSS DARK THEME, FLOATING ISLANDS & PROCREATE GESTURES
+// ============================================================================
+
+void KisMainWindow::setupBrocreateUI()
+{
+    if (d->brocreateUiInitialized) {
+        return;
+    }
+    d->brocreateUiInitialized = true;
+
+    setAttribute(Qt::WA_AcceptTouchEvents, true);
+    d->widgetStack->installEventFilter(this);
+    d->mdiArea->setAttribute(Qt::WA_AcceptTouchEvents, true);
+    d->mdiArea->installEventFilter(this);
+
+    if (menuBar()) {
+        menuBar()->setVisible(false);
+    }
+    if (statusBar()) {
+        statusBar()->hide();
+    }
+    showDockerTitleBars(false);
+
+    // Hide desktop toolbars by default for clean Brocreate tablet workspace
+    Q_FOREACH (QToolBar *tb, findChildren<QToolBar *>()) {
+        tb->hide();
+    }
+
+    // Long-press eyedropper timer (1-finger hold >= 450ms)
+    d->longPressEyedropperTimer = new QTimer(this);
+    d->longPressEyedropperTimer->setSingleShot(true);
+    d->longPressEyedropperTimer->setInterval(450);
+    connect(d->longPressEyedropperTimer, SIGNAL(timeout()), this, SLOT(slotBrocreateLongPressEyedropper()));
+
+    auto makeIslandBtn = [this](QWidget *parent, BrocreateGlyph glyph, const QString &tooltip, const QString &actionName, bool checkable = false) -> QToolButton* {
+        QToolButton *btn = new QToolButton(parent);
+        btn->setIcon(makeBrocreateIcon(glyph));
+        btn->setIconSize(QSize(20, 20));
+        btn->setFixedSize(34, 34);
+        btn->setCheckable(checkable);
+        btn->setToolTip(tooltip);
+        btn->setProperty("brocreateAction", actionName);
+        if (!actionName.isEmpty()) {
+            connect(btn, SIGNAL(clicked()), this, SLOT(slotBrocreateTriggerActionByName()));
+        }
+        return btn;
+    };
+
+    // ------------------------------------------------------------------------
+    // 1. TOP-LEFT FLOATING ISLAND
+    // ------------------------------------------------------------------------
+    d->topLeftIsland = new QFrame(d->widgetStack);
+    d->topLeftIsland->setObjectName(QStringLiteral("brocreateTopLeftIsland"));
+    QHBoxLayout *tlLayout = new QHBoxLayout(d->topLeftIsland);
+    tlLayout->setContentsMargins(8, 5, 8, 5);
+    tlLayout->setSpacing(4);
+
+    tlLayout->addWidget(makeIslandBtn(d->topLeftIsland, BrocreateGlyph::NewDoc, i18n("New Canvas"), QStringLiteral("file_new")));
+    tlLayout->addWidget(makeIslandBtn(d->topLeftIsland, BrocreateGlyph::OpenDoc, i18n("Open"), QStringLiteral("file_open")));
+    tlLayout->addWidget(makeIslandBtn(d->topLeftIsland, BrocreateGlyph::SaveDoc, i18n("Save"), QStringLiteral("file_save")));
+    tlLayout->addWidget(makeIslandBtn(d->topLeftIsland, BrocreateGlyph::Settings, i18n("Preferences"), QStringLiteral("options_configure")));
+
+    QFrame *tlDiv1 = new QFrame(d->topLeftIsland);
+    tlDiv1->setObjectName(QStringLiteral("brocreateDividerV"));
+    tlDiv1->setFixedSize(1, 22);
+    tlLayout->addWidget(tlDiv1);
+
+    d->colorSwatchButton = new QPushButton(d->topLeftIsland);
+    d->colorSwatchButton->setObjectName(QStringLiteral("brocreateColorSwatch"));
+    d->colorSwatchButton->setFixedSize(24, 24);
+    d->colorSwatchButton->setToolTip(i18n("Active Color"));
+    connect(d->colorSwatchButton, &QPushButton::clicked, this, [this]() {
+        if (QDockWidget *colorDock = dockWidget(QStringLiteral("ColorSelectorNg"))) {
+            colorDock->setVisible(!colorDock->isVisible());
+            if (colorDock->isVisible()) {
+                colorDock->raise();
+            }
+        }
+    });
+    tlLayout->addWidget(d->colorSwatchButton);
+
+    d->blendModeCombo = new QComboBox(d->topLeftIsland);
+    d->blendModeCombo->setObjectName(QStringLiteral("brocreateBlendCombo"));
+    d->blendModeCombo->setFixedHeight(30);
+    d->blendModeCombo->setMinimumWidth(98);
+    const QList<QPair<QString, QString>> blendModes = {
+        {QStringLiteral("Normal"), QStringLiteral("normal")},
+        {QStringLiteral("Multiply"), QStringLiteral("multiply")},
+        {QStringLiteral("Screen"), QStringLiteral("screen")},
+        {QStringLiteral("Overlay"), QStringLiteral("overlay")},
+        {QStringLiteral("Darken"), QStringLiteral("darken")},
+        {QStringLiteral("Lighten"), QStringLiteral("lighten")},
+        {QStringLiteral("Color Dodge"), QStringLiteral("dodge")},
+        {QStringLiteral("Color Burn"), QStringLiteral("burn")},
+        {QStringLiteral("Soft Light"), QStringLiteral("soft_light_svg")},
+        {QStringLiteral("Hard Light"), QStringLiteral("hard_light")},
+        {QStringLiteral("Add"), QStringLiteral("add")},
+        {QStringLiteral("Difference"), QStringLiteral("diff")}
+    };
+    for (const auto &bm : blendModes) {
+        d->blendModeCombo->addItem(bm.first, bm.second);
+    }
+    connect(d->blendModeCombo, SIGNAL(currentIndexChanged(int)), this, SLOT(slotBrocreateBlendModeChanged(int)));
+    tlLayout->addWidget(d->blendModeCombo);
+
+    QFrame *tlDiv2 = new QFrame(d->topLeftIsland);
+    tlDiv2->setObjectName(QStringLiteral("brocreateDividerV"));
+    tlDiv2->setFixedSize(1, 22);
+    tlLayout->addWidget(tlDiv2);
+
+    tlLayout->addWidget(makeIslandBtn(d->topLeftIsland, BrocreateGlyph::Undo, i18n("Undo"), QStringLiteral("edit_undo")));
+    tlLayout->addWidget(makeIslandBtn(d->topLeftIsland, BrocreateGlyph::Redo, i18n("Redo"), QStringLiteral("edit_redo")));
+
+    d->animationModeBtn = makeIslandBtn(d->topLeftIsland, BrocreateGlyph::Animation, i18n("Animation & Onion Skin"), QString(), true);
+    connect(d->animationModeBtn, SIGNAL(clicked()), this, SLOT(slotBrocreateToggleAnimationLayout()));
+    tlLayout->addWidget(d->animationModeBtn);
+
+    d->studioToggleBtn = makeIslandBtn(d->topLeftIsland, BrocreateGlyph::StudioDock, i18n("Toggle Studio Dock"), QString(), true);
+    d->studioToggleBtn->setChecked(true);
+    connect(d->studioToggleBtn, SIGNAL(clicked()), this, SLOT(slotBrocreateToggleStudioDock()));
+    tlLayout->addWidget(d->studioToggleBtn);
+
+    d->topLeftIsland->adjustSize();
+
+    // ------------------------------------------------------------------------
+    // 2. TOP-CENTER DYNAMIC ISLAND
+    // ------------------------------------------------------------------------
+    d->topCenterIsland = new QFrame(d->widgetStack);
+    d->topCenterIsland->setObjectName(QStringLiteral("brocreateTopCenterIsland"));
+    QHBoxLayout *tcLayout = new QHBoxLayout(d->topCenterIsland);
+    tcLayout->setContentsMargins(10, 5, 10, 5);
+    tcLayout->setSpacing(6);
+
+    d->brushModeBtn = makeIslandBtn(d->topCenterIsland, BrocreateGlyph::Brush, i18n("Brush"), QStringLiteral("KritaShape/KisToolBrush"), true);
+    d->brushModeBtn->setChecked(true);
+    d->eraserModeBtn = makeIslandBtn(d->topCenterIsland, BrocreateGlyph::Eraser, i18n("Eraser"), QStringLiteral("erase_action"), true);
+    d->selectModeBtn = makeIslandBtn(d->topCenterIsland, BrocreateGlyph::Selection, i18n("Selection"), QStringLiteral("KisToolSelectOutline"), true);
+
+    tcLayout->addWidget(d->brushModeBtn);
+    tcLayout->addWidget(d->eraserModeBtn);
+    tcLayout->addWidget(d->selectModeBtn);
+
+    d->opacityPill = new BrocreatePillSlider(BrocreatePillSlider::OpacityBluePill, d->topCenterIsland);
+    d->opacityPill->setNormalizedValue(0.35);
+    d->opacityPill->setDisplayText(QStringLiteral("35%"));
+    d->opacityPill->onValueChanged = [this](qreal val) { slotBrocreateOpacityChanged(val); };
+    tcLayout->addWidget(d->opacityPill);
+
+    d->brushSizePill = new BrocreatePillSlider(BrocreatePillSlider::SizeDarkPill, d->topCenterIsland);
+    d->brushSizePill->setNormalizedValue(0.26);
+    d->brushSizePill->setDisplayText(QStringLiteral("5.00 px"));
+    d->brushSizePill->onValueChanged = [this](qreal val) { slotBrocreateBrushSizeChanged(val); };
+    tcLayout->addWidget(d->brushSizePill);
+
+    d->mirrorBtn = makeIslandBtn(d->topCenterIsland, BrocreateGlyph::Mirror, i18n("Mirror Canvas"), QStringLiteral("mirror_canvas"), true);
+    d->fullscreenBtn = makeIslandBtn(d->topCenterIsland, BrocreateGlyph::Fullscreen, i18n("Canvas Only / Fullscreen"), QString(), true);
+    connect(d->fullscreenBtn, SIGNAL(clicked()), this, SLOT(slotBrocreateToggleFullscreenCanvasOnly()));
+
+    tcLayout->addWidget(d->mirrorBtn);
+    tcLayout->addWidget(d->fullscreenBtn);
+
+    d->topCenterIsland->adjustSize();
+
+    // ------------------------------------------------------------------------
+    // 3. LEFT FLOATING TOOL CAPSULE (44x44px touch targets split 4 + 5)
+    // ------------------------------------------------------------------------
+    d->leftToolCapsule = new QFrame(d->widgetStack);
+    d->leftToolCapsule->setObjectName(QStringLiteral("brocreateLeftToolCapsule"));
+    QVBoxLayout *ltLayout = new QVBoxLayout(d->leftToolCapsule);
+    ltLayout->setContentsMargins(6, 8, 6, 8);
+    ltLayout->setSpacing(4);
+
+    d->leftToolGroup = new QButtonGroup(this);
+    d->leftToolGroup->setExclusive(true);
+
+    struct ToolEntry {
+        BrocreateGlyph glyph;
+        QString label;
+        QString toolId;
+        bool isQuickMenu;
+    };
+
+    const QList<ToolEntry> topTools = {
+        {BrocreateGlyph::Move, i18n("Move / Transform"), QStringLiteral("KritaTransform/KisToolMove"), false},
+        {BrocreateGlyph::Brush, i18n("Freehand Brush"), QStringLiteral("KritaShape/KisToolBrush"), false},
+        {BrocreateGlyph::VectorLine, i18n("Vector Line"), QStringLiteral("KritaShape/KisToolLine"), false},
+        {BrocreateGlyph::Fill, i18n("Fill"), QStringLiteral("KritaFill/KisToolFill"), false}
+    };
+
+    const QList<ToolEntry> bottomTools = {
+        {BrocreateGlyph::Lasso, i18n("Lasso Selection"), QStringLiteral("KisToolSelectOutline"), false},
+        {BrocreateGlyph::RectSelect, i18n("Rectangular Selection"), QStringLiteral("KisToolSelectRectangular"), false},
+        {BrocreateGlyph::Eyedropper, i18n("Eyedropper"), QStringLiteral("KritaSelected/KisToolColorSampler"), false},
+        {BrocreateGlyph::Symmetry, i18n("Symmetry"), QStringLiteral("KisToolMultiBrush"), false},
+        {BrocreateGlyph::QuickAdd, i18n("Quick Settings"), QString(), true}
+    };
+
+    auto addCapsuleTool = [&](const ToolEntry &entry, bool defaultChecked) {
+        QToolButton *btn = new QToolButton(d->leftToolCapsule);
+        btn->setIcon(makeBrocreateIcon(entry.glyph));
+        btn->setIconSize(QSize(22, 22));
+        btn->setFixedSize(44, 44);
+        btn->setToolTip(entry.label);
+        btn->setProperty("brocreateToolId", entry.toolId);
+        if (entry.isQuickMenu) {
+            btn->setCheckable(false);
+            connect(btn, SIGNAL(clicked()), this, SLOT(slotBrocreateQuickSettingsMenu()));
+        } else {
+            btn->setCheckable(true);
+            btn->setChecked(defaultChecked);
+            d->leftToolGroup->addButton(btn);
+            d->leftToolButtons.append(btn);
+            connect(btn, SIGNAL(clicked()), this, SLOT(slotBrocreateToolButtonClicked()));
+        }
+        ltLayout->addWidget(btn, 0, Qt::AlignHCenter);
+    };
+
+    for (int i = 0; i < topTools.size(); ++i) {
+        addCapsuleTool(topTools.at(i), i == 1);
+    }
+
+    QFrame *capsuleDivider = new QFrame(d->leftToolCapsule);
+    capsuleDivider->setObjectName(QStringLiteral("brocreateDividerH"));
+    capsuleDivider->setFixedSize(30, 1);
+    ltLayout->addWidget(capsuleDivider, 0, Qt::AlignHCenter);
+
+    for (const ToolEntry &entry : bottomTools) {
+        addCapsuleTool(entry, false);
+    }
+
+    d->leftToolCapsule->adjustSize();
+
+    updateBrocreateColorSwatch();
+    updateBrocreateFloatingVisibility(d->widgetStack->currentIndex() == 1);
+    slotUpdateBrocreateOverlayGeometry();
+}
+
+void KisMainWindow::applyBrocreateDarkTheme()
+{
+    const QString brocreateQss = QStringLiteral(R"(
+        QMainWindow, KisMainWindow, QDialog {
+            background-color: #0B0B0D;
+            color: #F4F4F5;
+        }
+        QMdiArea {
+            background-color: #0B0B0D;
+            border: none;
+        }
+        QFrame#brocreateTopLeftIsland,
+        QFrame#brocreateTopCenterIsland {
+            background-color: #141417;
+            border: 1px solid #27272A;
+            border-radius: 14px;
+        }
+        QFrame#brocreateLeftToolCapsule {
+            background-color: #141417;
+            border: 1px solid #27272A;
+            border-radius: 16px;
+        }
+        QFrame#brocreateDividerV,
+        QFrame#brocreateDividerH {
+            background-color: #27272A;
+            border: none;
+        }
+        QFrame#brocreateTopLeftIsland QToolButton,
+        QFrame#brocreateTopCenterIsland QToolButton,
+        QFrame#brocreateLeftToolCapsule QToolButton {
+            background-color: transparent;
+            border: none;
+            border-radius: 10px;
+            padding: 4px;
+        }
+        QFrame#brocreateTopLeftIsland QToolButton:hover,
+        QFrame#brocreateTopCenterIsland QToolButton:hover,
+        QFrame#brocreateLeftToolCapsule QToolButton:hover {
+            background-color: #1E1E22;
+        }
+        QFrame#brocreateTopLeftIsland QToolButton:checked,
+        QFrame#brocreateTopCenterIsland QToolButton:checked,
+        QFrame#brocreateLeftToolCapsule QToolButton:checked {
+            background-color: #0066FF;
+        }
+        QComboBox#brocreateBlendCombo {
+            background-color: #1E1E22;
+            color: #F4F4F5;
+            border: 1px solid #27272A;
+            border-radius: 8px;
+            padding: 3px 8px;
+            font-weight: 600;
+        }
+        QComboBox#brocreateBlendCombo::drop-down {
+            border: none;
+            width: 18px;
+        }
+        QDockWidget {
+            background-color: #141417;
+            color: #F4F4F5;
+            border: 1px solid #27272A;
+            border-radius: 14px;
+        }
+        QDockWidget > QWidget {
+            background-color: #141417;
+            border-radius: 12px;
+        }
+        QTabBar::tab {
+            background-color: #1E1E22;
+            color: #A1A1AA;
+            border: none;
+            border-radius: 8px;
+            padding: 6px 12px;
+            margin: 2px;
+        }
+        QTabBar::tab:selected {
+            background-color: #0066FF;
+            color: #FFFFFF;
+            font-weight: 600;
+        }
+        QListView, QTreeView, QTableView {
+            background-color: #141417;
+            alternate-background-color: #18181C;
+            color: #F4F4F5;
+            border: none;
+            outline: none;
+        }
+        QListView::item, QTreeView::item {
+            background-color: #1E1E22;
+            border-radius: 8px;
+            margin: 2px 4px;
+            padding: 4px 6px;
+            min-height: 36px;
+        }
+        QListView::item:selected, QTreeView::item:selected {
+            background-color: #0066FF;
+            color: #FFFFFF;
+        }
+        QPushButton, QToolButton {
+            background-color: #1E1E22;
+            color: #F4F4F5;
+            border: 1px solid #27272A;
+            border-radius: 8px;
+            padding: 4px 8px;
+        }
+        QPushButton:checked, QToolButton:checked {
+            background-color: #0066FF;
+            border-color: #0066FF;
+            color: #FFFFFF;
+        }
+        QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {
+            background-color: #1E1E22;
+            color: #F4F4F5;
+            border: 1px solid #27272A;
+            border-radius: 8px;
+            padding: 4px 8px;
+        }
+        QProgressBar {
+            background-color: #1E1E22;
+            border: 1px solid #27272A;
+            border-radius: 8px;
+            text-align: center;
+            color: #FFFFFF;
+        }
+        QProgressBar::chunk {
+            background-color: #0066FF;
+            border-radius: 7px;
+        }
+        QMenu {
+            background-color: #141417;
+            color: #F4F4F5;
+            border: 1px solid #27272A;
+            border-radius: 12px;
+            padding: 6px;
+        }
+        QMenu::item {
+            padding: 8px 18px;
+            border-radius: 8px;
+        }
+        QMenu::item:selected {
+            background-color: #0066FF;
+            color: #FFFFFF;
+        }
+        QScrollBar:vertical, QScrollBar:horizontal {
+            background: #141417;
+            width: 6px;
+            height: 6px;
+            border-radius: 3px;
+        }
+        QScrollBar::handle:vertical, QScrollBar::handle:horizontal {
+            background: #27272A;
+            border-radius: 3px;
+            min-height: 24px;
+            min-width: 24px;
+        }
+        QDockWidget#TimelineDocker, QDockWidget#OnionSkinsDocker {
+            background-color: #121215;
+        }
+    )");
+
+    this->setStyleSheet(brocreateQss);
+
+    if (d->welcomeScroller) {
+        d->welcomeScroller->setStyleSheet(QStringLiteral(R"(
+            QScrollArea, KisWelcomePageWidget {
+                background-color: #121214;
+                color: #F4F4F5;
+                border: none;
+            }
+            QFrame, QAbstractButton {
+                border-radius: 16px;
+            }
+            QPushButton {
+                background-color: #232327;
+                color: #F4F4F5;
+                border: 1px solid #27272A;
+                border-radius: 12px;
+                padding: 8px 14px;
+            }
+            QPushButton:hover {
+                background-color: #2B2B30;
+            }
+            QPushButton:checked, QPushButton:default {
+                background-color: #0066FF;
+                border-color: #0066FF;
+                color: #FFFFFF;
+            }
+        )"));
+    }
+}
+
+void KisMainWindow::updateBrocreateFloatingVisibility(bool showCanvasUI)
+{
+    if (!d->brocreateUiInitialized) {
+        return;
+    }
+    if (d->topLeftIsland) {
+        d->topLeftIsland->setVisible(showCanvasUI);
+        if (showCanvasUI) d->topLeftIsland->raise();
+    }
+    if (d->topCenterIsland) {
+        d->topCenterIsland->setVisible(showCanvasUI);
+        if (showCanvasUI) d->topCenterIsland->raise();
+    }
+    if (d->leftToolCapsule) {
+        d->leftToolCapsule->setVisible(showCanvasUI);
+        if (showCanvasUI) d->leftToolCapsule->raise();
+    }
+}
+
+void KisMainWindow::slotUpdateBrocreateOverlayGeometry()
+{
+    if (!d->brocreateUiInitialized || !d->widgetStack) {
+        return;
+    }
+
+    const QRect area = d->widgetStack->rect();
+    const int margin = 12;
+
+    if (d->topLeftIsland) {
+        d->topLeftIsland->adjustSize();
+        d->topLeftIsland->move(margin, margin);
+        d->topLeftIsland->raise();
+    }
+
+    if (d->topCenterIsland) {
+        d->topCenterIsland->adjustSize();
+        int tcX = (area.width() - d->topCenterIsland->width()) / 2;
+        if (d->topLeftIsland) {
+            const int minX = d->topLeftIsland->geometry().right() + 10;
+            if (tcX < minX) {
+                tcX = qMin(minX, qMax(margin, area.width() - d->topCenterIsland->width() - margin));
+            }
+        }
+        d->topCenterIsland->move(tcX, margin);
+        d->topCenterIsland->raise();
+    }
+
+    if (d->leftToolCapsule) {
+        d->leftToolCapsule->adjustSize();
+        const int ltY = qMax(72, (area.height() - d->leftToolCapsule->height()) / 2);
+        d->leftToolCapsule->move(margin, ltY);
+        d->leftToolCapsule->raise();
+    }
+}
+
+void KisMainWindow::updateBrocreateColorSwatch()
+{
+    if (!d->colorSwatchButton || !d->viewManager || !d->viewManager->canvasResourceProvider()) {
+        return;
+    }
+    const QColor c = d->viewManager->canvasResourceProvider()->fgColor().toQColor();
+    const QColor displayColor = c.isValid() ? c : QColor("#E06D94");
+    d->colorSwatchButton->setStyleSheet(
+        QStringLiteral("QPushButton#brocreateColorSwatch { background-color: %1; border: 2px solid #F4F4F5; border-radius: 6px; padding: 0px; }")
+            .arg(displayColor.name(QColor::HexRgb)));
+}
+
+void KisMainWindow::arrangeBrocreateStudioDocks(bool animationMode)
+{
+    QDockWidget *colorDock = dockWidget(QStringLiteral("ColorSelectorNg"));
+    QDockWidget *layerDock = dockWidget(QStringLiteral("KisLayerBox"));
+    QDockWidget *presetDock = dockWidget(QStringLiteral("PresetDocker"));
+    QDockWidget *timelineDock = dockWidget(QStringLiteral("TimelineDocker"));
+    QDockWidget *onionDock = dockWidget(QStringLiteral("OnionSkinsDocker"));
+
+    const Qt::DockWidgetArea studioArea = animationMode ? Qt::LeftDockWidgetArea : Qt::RightDockWidgetArea;
+
+    QList<QDockWidget *> studioDocks;
+    if (colorDock) studioDocks << colorDock;
+    if (layerDock) studioDocks << layerDock;
+    if (presetDock) studioDocks << presetDock;
+
+    for (int i = 0; i < studioDocks.size(); ++i) {
+        QDockWidget *dw = studioDocks.at(i);
+        addDockWidget(studioArea, dw);
+        dw->setVisible(true);
+        if (i > 0) {
+            splitDockWidget(studioDocks.at(i - 1), dw, Qt::Vertical);
+        }
+    }
+
+    if (timelineDock) {
+        addDockWidget(Qt::BottomDockWidgetArea, timelineDock);
+        timelineDock->setVisible(animationMode);
+    }
+    if (onionDock) {
+        addDockWidget(Qt::BottomDockWidgetArea, onionDock);
+        onionDock->setVisible(animationMode);
+        if (timelineDock && animationMode) {
+            splitDockWidget(timelineDock, onionDock, Qt::Horizontal);
+        }
+    }
+
+    showDockerTitleBars(false);
+    QTimer::singleShot(0, this, SLOT(slotUpdateBrocreateOverlayGeometry()));
+}
+
+void KisMainWindow::slotBrocreateBlendModeChanged(int index)
+{
+    if (!d->blendModeCombo || !d->viewManager || !d->viewManager->canvasResourceProvider()) {
+        return;
+    }
+    const QString compositeId = d->blendModeCombo->itemData(index).toString();
+    if (!compositeId.isEmpty()) {
+        d->viewManager->canvasResourceProvider()->setCurrentCompositeOp(compositeId);
+    }
+}
+
+void KisMainWindow::slotBrocreateOpacityChanged(qreal normalizedValue)
+{
+    if (d->updatingFromResource || !d->viewManager || !d->viewManager->canvasResourceProvider()) {
+        return;
+    }
+    const qreal clamped = qBound<qreal>(0.0, normalizedValue, 1.0);
+    if (d->opacityPill) {
+        d->opacityPill->setDisplayText(QString("%1%").arg(qRound(clamped * 100.0)));
+    }
+    d->viewManager->canvasResourceProvider()->setOpacity(clamped);
+}
+
+void KisMainWindow::slotBrocreateBrushSizeChanged(qreal normalizedValue)
+{
+    if (d->updatingFromResource || !d->viewManager || !d->viewManager->canvasResourceProvider()) {
+        return;
+    }
+    const qreal clamped = qBound<qreal>(0.0, normalizedValue, 1.0);
+    const qreal sizePx = qMax<qreal>(1.0, std::pow(500.0, clamped));
+    if (d->brushSizePill) {
+        d->brushSizePill->setDisplayText(QString::number(sizePx, 'f', 2) + QStringLiteral(" px"));
+    }
+    d->viewManager->canvasResourceProvider()->resourceManager()->setResource(KoCanvasResource::Size, sizePx);
+}
+
+void KisMainWindow::slotBrocreateToolButtonClicked()
+{
+    QToolButton *btn = qobject_cast<QToolButton *>(sender());
+    if (!btn || !d->viewManager || !d->viewManager->toolManager()) {
+        return;
+    }
+    const QString toolId = btn->property("brocreateToolId").toString();
+    if (!toolId.isEmpty()) {
+        d->viewManager->toolManager()->switchToolRequested(toolId);
+    }
+}
+
+void KisMainWindow::slotBrocreateTriggerActionByName()
+{
+    QToolButton *btn = qobject_cast<QToolButton *>(sender());
+    if (!btn) {
+        return;
+    }
+    const QString actionName = btn->property("brocreateAction").toString();
+    if (actionName.isEmpty()) {
+        return;
+    }
+    if (QAction *act = actionCollection()->action(actionName)) {
+        act->trigger();
+    } else if (d->viewManager && d->viewManager->toolManager()) {
+        d->viewManager->toolManager()->switchToolRequested(actionName);
+    }
+}
+
+void KisMainWindow::slotBrocreateToggleAnimationLayout()
+{
+    d->animationLayoutActive = !d->animationLayoutActive;
+    if (d->animationModeBtn) {
+        d->animationModeBtn->setChecked(d->animationLayoutActive);
+    }
+    arrangeBrocreateStudioDocks(d->animationLayoutActive);
+}
+
+void KisMainWindow::slotBrocreateToggleFullscreenCanvasOnly()
+{
+    d->canvasOnlyOverlayHidden = !d->canvasOnlyOverlayHidden;
+    if (d->fullscreenBtn) {
+        d->fullscreenBtn->setChecked(d->canvasOnlyOverlayHidden);
+    }
+    if (QAction *canvasOnly = actionCollection()->action(QStringLiteral("view_show_canvas_only"))) {
+        if (canvasOnly->isChecked() != d->canvasOnlyOverlayHidden) {
+            canvasOnly->trigger();
+        }
+    } else {
+        toggleDockersVisibility(!d->canvasOnlyOverlayHidden);
+    }
+    updateBrocreateFloatingVisibility(!d->canvasOnlyOverlayHidden && d->widgetStack->currentIndex() == 1);
+}
+
+void KisMainWindow::slotBrocreateToggleStudioDock()
+{
+    const bool showStudio = d->studioToggleBtn ? d->studioToggleBtn->isChecked() : true;
+    if (d->toggleDockers) {
+        d->toggleDockers->setChecked(showStudio);
+    } else {
+        toggleDockersVisibility(showStudio);
+    }
+}
+
+void KisMainWindow::slotBrocreateQuickSettingsMenu()
+{
+    QMenu menu(this);
+    menu.addAction(i18n("New Canvas..."), this, SLOT(slotFileNew()));
+    menu.addAction(i18n("Save Canvas"), this, SLOT(slotFileSave()));
+    menu.addSeparator();
+    menu.addAction(d->animationLayoutActive ? i18n("Switch to Illustration Studio") : i18n("Switch to Animation & Onion Skin"),
+                   this, SLOT(slotBrocreateToggleAnimationLayout()));
+    menu.addAction(i18n("Fit Canvas to Screen"), this, [this]() {
+        if (QAction *a = actionCollection()->action(QStringLiteral("zoom_to_fit"))) {
+            a->trigger();
+        } else if (QAction *a = actionCollection()->action(QStringLiteral("view_zoom_fit_to_page"))) {
+            a->trigger();
+        }
+    });
+    menu.addAction(i18n("Mirror Canvas"), this, [this]() {
+        if (QAction *a = actionCollection()->action(QStringLiteral("mirror_canvas"))) {
+            a->trigger();
+        }
+    });
+    menu.addSeparator();
+    menu.addAction(i18n("Preferences..."), this, SLOT(slotPreferences()));
+    menu.addAction(i18n("Return to Gallery"), this, SLOT(slotFileCloseAll()));
+
+    const QPoint pos = d->leftToolCapsule
+        ? d->leftToolCapsule->mapToGlobal(QPoint(d->leftToolCapsule->width() + 8, d->leftToolCapsule->height() - 44))
+        : QCursor::pos();
+    menu.exec(pos);
+}
+
+void KisMainWindow::slotBrocreateCopyPasteMenu(const QPoint &globalPos)
+{
+    QMenu menu(this);
+    menu.setTitle(i18n("Copy & Paste"));
+    auto addActionIfPresent = [&menu, this](const QString &name, const QString &fallbackLabel) {
+        if (QAction *a = actionCollection()->action(name)) {
+            menu.addAction(a);
+        } else {
+            Q_UNUSED(fallbackLabel);
+        }
+    };
+    addActionIfPresent(QStringLiteral("edit_cut"), i18n("Cut"));
+    addActionIfPresent(QStringLiteral("edit_copy"), i18n("Copy"));
+    addActionIfPresent(QStringLiteral("copy_merged"), i18n("Copy All"));
+    addActionIfPresent(QStringLiteral("edit_paste"), i18n("Paste"));
+    menu.addSeparator();
+    addActionIfPresent(QStringLiteral("duplicatelayer"), i18n("Duplicate"));
+    addActionIfPresent(QStringLiteral("clear"), i18n("Clear"));
+    addActionIfPresent(QStringLiteral("deselect"), i18n("Deselect"));
+
+    if (!menu.isEmpty()) {
+        menu.exec(globalPos);
+    }
+}
+
+void KisMainWindow::slotBrocreateLongPressEyedropper()
+{
+    if (d->viewManager && d->viewManager->toolManager()) {
+        d->viewManager->toolManager()->switchToolRequested(QStringLiteral("KritaSelected/KisToolColorSampler"));
+    }
+}
+
+void KisMainWindow::slotBrocreateCanvasResourceChanged(int key, const QVariant &value)
+{
+    Q_UNUSED(value);
+    if (!d->viewManager || !d->viewManager->canvasResourceProvider()) {
+        return;
+    }
+
+    d->updatingFromResource = true;
+    if (key == KoCanvasResource::ForegroundColor) {
+        updateBrocreateColorSwatch();
+    } else if (key == KoCanvasResource::Opacity && d->opacityPill) {
+        const qreal op = d->viewManager->canvasResourceProvider()->opacity();
+        d->opacityPill->setNormalizedValue(op);
+        d->opacityPill->setDisplayText(QString("%1%").arg(qRound(op * 100.0)));
+    } else if (key == KoCanvasResource::Size && d->brushSizePill) {
+        const qreal sz = value.toDouble();
+        if (sz > 0.1) {
+            const qreal norm = qBound<qreal>(0.0, std::log(sz) / std::log(500.0), 1.0);
+            d->brushSizePill->setNormalizedValue(norm);
+            d->brushSizePill->setDisplayText(QString::number(sz, 'f', 2) + QStringLiteral(" px"));
+        }
+    }
+    d->updatingFromResource = false;
+}
+
+bool KisMainWindow::handleBrocreateTabletEvent(QTabletEvent *tabletEvent)
+{
+    Q_UNUSED(tabletEvent);
+    d->lastStylusTimer.restart();
+    if (d->longPressEyedropperTimer && d->longPressEyedropperTimer->isActive()) {
+        d->longPressEyedropperTimer->stop();
+    }
+    return false; // Never block 144Hz Adreno stylus drawing
+}
+
+bool KisMainWindow::handleBrocreateTouchEvent(QObject *watched, QTouchEvent *touchEvent)
+{
+    Q_UNUSED(watched);
+    const QList<QTouchEvent::TouchPoint> points = touchEvent->touchPoints();
+    if (points.isEmpty()) {
+        return false;
+    }
+
+    const int count = points.size();
+    QPointF centroid(0, 0);
+    QPointF globalCentroid(0, 0);
+    for (const QTouchEvent::TouchPoint &pt : points) {
+        centroid += pt.pos();
+        globalCentroid += pt.screenPos();
+    }
+    centroid /= count;
+    globalCentroid /= count;
+
+    // Palm Rejection: block stray palm or finger touches while stylus is active
+    if (count == 1) {
+        const QSizeF diam = points.first().ellipseDiameters();
+        const bool looksLikePalm = (diam.width() > 38.0 || diam.height() > 38.0);
+        const bool stylusRecentlyActive = d->lastStylusTimer.isValid() && d->lastStylusTimer.elapsed() < 350;
+        if (looksLikePalm || stylusRecentlyActive) {
+            if (d->longPressEyedropperTimer) {
+                d->longPressEyedropperTimer->stop();
+            }
+            touchEvent->accept();
+            return true;
+        }
+    }
+
+    if (touchEvent->type() == QEvent::TouchBegin) {
+        d->touchStartTimer.restart();
+        d->touchStartCentroid = centroid;
+        d->lastTouchCentroid = centroid;
+        d->maxTouchPoints = count;
+        d->touchGestureConsumed = false;
+        d->pinchFitTriggered = false;
+        d->initialPinchSpan = 0.0;
+
+        if (count == 1 && d->longPressEyedropperTimer) {
+            d->longPressEyedropperTimer->start();
+        } else if (d->longPressEyedropperTimer) {
+            d->longPressEyedropperTimer->stop();
+        }
+        return false;
+    }
+
+    if (touchEvent->type() == QEvent::TouchUpdate) {
+        if (count > d->maxTouchPoints) {
+            d->maxTouchPoints = count;
+            d->touchStartCentroid = centroid;
+            if (d->longPressEyedropperTimer) {
+                d->longPressEyedropperTimer->stop();
+            }
+        }
+
+        if (count == 1 && d->longPressEyedropperTimer && d->longPressEyedropperTimer->isActive()) {
+            if (QLineF(centroid, d->touchStartCentroid).length() > 14.0) {
+                d->longPressEyedropperTimer->stop();
+            }
+        }
+
+        // QuickPinch -> Fit to screen
+        if (count == 2 && !d->pinchFitTriggered) {
+            const qreal span = QLineF(points.at(0).pos(), points.at(1).pos()).length();
+            if (d->initialPinchSpan <= 1.0) {
+                d->initialPinchSpan = span;
+            } else if (d->initialPinchSpan > 70.0 && (d->initialPinchSpan - span) > 95.0 && d->touchStartTimer.elapsed() < 280) {
+                d->pinchFitTriggered = true;
+                d->touchGestureConsumed = true;
+                if (QAction *a = actionCollection()->action(QStringLiteral("zoom_to_fit"))) {
+                    a->trigger();
+                } else if (QAction *a = actionCollection()->action(QStringLiteral("view_zoom_fit_to_page"))) {
+                    a->trigger();
+                }
+                touchEvent->accept();
+                return true;
+            }
+        }
+
+        // 3-Finger Swipe Down -> Copy/Paste Menu
+        if (count == 3 && !d->touchGestureConsumed) {
+            const qreal dx = centroid.x() - d->touchStartCentroid.x();
+            const qreal dy = centroid.y() - d->touchStartCentroid.y();
+            if (dy > 65.0 && dy > std::abs(dx) * 1.35) {
+                d->touchGestureConsumed = true;
+                const QPoint menuPos = globalCentroid.toPoint();
+                QTimer::singleShot(0, this, [this, menuPos]() {
+                    slotBrocreateCopyPasteMenu(menuPos);
+                });
+                touchEvent->accept();
+                return true;
+            }
+        }
+
+        d->lastTouchCentroid = centroid;
+        return false;
+    }
+
+    if (touchEvent->type() == QEvent::TouchEnd || touchEvent->type() == QEvent::TouchCancel) {
+        if (d->longPressEyedropperTimer) {
+            d->longPressEyedropperTimer->stop();
+        }
+
+        const qint64 elapsed = d->touchStartTimer.isValid() ? d->touchStartTimer.elapsed() : 1000;
+        const qreal moved = QLineF(centroid, d->touchStartCentroid).length();
+
+        if (!d->touchGestureConsumed && touchEvent->type() == QEvent::TouchEnd && elapsed < 340 && moved < 32.0) {
+            if (d->maxTouchPoints == 2) {
+                d->touchGestureConsumed = true;
+                undo();
+                touchEvent->accept();
+                return true;
+            } else if (d->maxTouchPoints == 3) {
+                d->touchGestureConsumed = true;
+                redo();
+                touchEvent->accept();
+                return true;
+            } else if (d->maxTouchPoints == 4) {
+                d->touchGestureConsumed = true;
+                slotBrocreateToggleFullscreenCanvasOnly();
+                touchEvent->accept();
+                return true;
+            }
+        }
+
+        d->maxTouchPoints = 0;
+        d->initialPinchSpan = 0.0;
+        return false;
+    }
+
+    return false;
+}
+
+bool KisMainWindow::eventFilter(QObject *watched, QEvent *event)
+{
+    if (watched == d->widgetStack && event->type() == QEvent::Resize) {
+        slotUpdateBrocreateOverlayGeometry();
+    }
+
+    switch (event->type()) {
+    case QEvent::TabletPress:
+    case QEvent::TabletMove:
+    case QEvent::TabletRelease:
+        return handleBrocreateTabletEvent(static_cast<QTabletEvent *>(event));
+    case QEvent::TouchBegin:
+    case QEvent::TouchUpdate:
+    case QEvent::TouchEnd:
+    case QEvent::TouchCancel:
+        if (handleBrocreateTouchEvent(watched, static_cast<QTouchEvent *>(event))) {
+            return true;
+        }
+        break;
+    default:
+        break;
+    }
+
+    return KXmlGuiWindow::eventFilter(watched, event);
 }
 
 #include <moc_KisMainWindow.cpp>

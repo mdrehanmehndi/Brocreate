@@ -7,6 +7,9 @@
 
 #define GL_GLEXT_PROTOTYPES
 
+#include <QElapsedTimer>
+#include <QScreen>
+#include <QTimer>
 #include <QWindow>
 
 #include "opengl/kis_opengl_canvas2.h"
@@ -30,6 +33,19 @@
 #include "config-qt-patches-present.h"
 
 static bool OPENGL_SUCCESS = false;
+
+static int brocreateFrameIntervalMs(const QWidget *widget)
+{
+    qreal hz = 144.0;
+    if (widget && widget->window() && widget->window()->windowHandle() && widget->window()->windowHandle()->screen()) {
+        const qreal screenHz = widget->window()->windowHandle()->screen()->refreshRate();
+        if (screenHz >= 30.0 && screenHz <= 240.0) {
+            hz = screenHz;
+        }
+    }
+    // 144Hz panel -> ~6.94ms -> 6ms batching budget
+    return qBound(4, static_cast<int>(1000.0 / hz), 16);
+}
 
 class KisOpenGLCanvas2::CanvasBridge
     : public KisOpenGLCanvasRenderer::CanvasBridge
@@ -74,6 +90,10 @@ public:
     bool shouldSkipRenderingPass = false;
 #endif
     QRect canvasImageDirtyRect;
+    QRect batchedUpdateRect;
+    QTimer batchFlushTimer;
+    QElapsedTimer lastPaintTimer;
+    int gpuBusyDeferCount = 0;
     KisOpenGLCanvasRenderer *renderer;
     QScopedPointer<KisOpenGLSync> glSyncObject;
     KisRepaintDebugger repaintDbg;
@@ -123,6 +143,24 @@ KisOpenGLCanvas2::KisOpenGLCanvas2(KisCanvas2 *canvas,
 
     setUpdateBehavior(PartialUpdate);
 
+    // 144Hz OpenGL ES 3.0+ update batching timer (Adreno 750 TBDR friendly)
+    d->batchFlushTimer.setSingleShot(true);
+    d->batchFlushTimer.setTimerType(Qt::PreciseTimer);
+    connect(&d->batchFlushTimer, &QTimer::timeout, this, [this]() {
+        if (d->batchedUpdateRect.isEmpty()) {
+            return;
+        }
+        if (isBusy() && d->gpuBusyDeferCount < 3) {
+            ++d->gpuBusyDeferCount;
+            d->batchFlushTimer.start(1);
+            return;
+        }
+        d->gpuBusyDeferCount = 0;
+        const QRect rectToUpdate = d->batchedUpdateRect;
+        d->batchedUpdateRect = QRect();
+        update(rectToUpdate);
+    });
+
     // we should make sure the texture doesn't have alpha channel,
     // otherwise blending will not work correctly.
     if (KisOpenGLModeProber::instance()->useHDRMode()) {
@@ -143,11 +181,13 @@ KisOpenGLCanvas2::KisOpenGLCanvas2(KisCanvas2 *canvas,
              * semi-transparent pixels (and it does), then Krita window itself
              * will become transparent. Which is not good.
              *
-             * In Angle mode, GL_RGB8 is not available (and the transparence effect
-             * doesn't exist at all).
+             * In Angle / OpenGL ES 3.0+ mode, GL_RGB8 is not available on all
+             * FBO configurations; GL_RGBA8 is universally supported on Adreno 750.
              */
             if (!KisOpenGL::hasOpenGLES()) {
                 setTextureFormat(GL_RGB8);
+            } else {
+                setTextureFormat(GL_RGBA8);
             }
         }
     }
@@ -221,12 +261,21 @@ void KisOpenGLCanvas2::initializeGL()
 {
     d->renderer->initializeGL();
     KisOpenGLSync::init(context());
+
+    if (context() && context()->isOpenGLES()) {
+        const QSurfaceFormat fmt = context()->format();
+        dbgOpenGL << "Brocreate OpenGL ES canvas initialized:"
+                  << fmt.majorVersion() << "." << fmt.minorVersion()
+                  << "batchIntervalMs:" << brocreateFrameIntervalMs(this);
+    }
 }
 
 void KisOpenGLCanvas2::resizeGL(int width, int height)
 {
     d->renderer->resizeGL(width, height);
     d->canvasImageDirtyRect = QRect(0, 0, width, height);
+    d->batchedUpdateRect = QRect();
+    d->batchFlushTimer.stop();
 }
 
 void KisOpenGLCanvas2::paintGL()
@@ -237,7 +286,14 @@ void KisOpenGLCanvas2::paintGL()
     }
 #endif
 
+    d->lastPaintTimer.restart();
+    d->gpuBusyDeferCount = 0;
+
     const QRect updateRect = d->updateRect ? *d->updateRect : QRect();
+    if (updateRect.isEmpty() || (!d->batchedUpdateRect.isEmpty() && updateRect.contains(d->batchedUpdateRect))) {
+        d->batchedUpdateRect = QRect();
+        d->batchFlushTimer.stop();
+    }
 
     if (!OPENGL_SUCCESS) {
         KisConfig cfg(false);
@@ -444,13 +500,47 @@ QVector<QRect> KisOpenGLCanvas2::updateCanvasProjection(const QVector<KisUpdateI
 
 void KisOpenGLCanvas2::updateCanvasImage(const QRect &imageUpdateRect)
 {
+    if (imageUpdateRect.isEmpty()) {
+        return;
+    }
+
     d->canvasImageDirtyRect |= imageUpdateRect;
-    update(imageUpdateRect);
+    d->batchedUpdateRect |= imageUpdateRect;
+
+    const int frameBudgetMs = brocreateFrameIntervalMs(this);
+    const qint64 elapsedMs = d->lastPaintTimer.isValid() ? d->lastPaintTimer.elapsed() : frameBudgetMs;
+
+    if (!d->batchFlushTimer.isActive() && !isBusy() && elapsedMs >= frameBudgetMs) {
+        const QRect rectToUpdate = d->batchedUpdateRect;
+        d->batchedUpdateRect = QRect();
+        d->gpuBusyDeferCount = 0;
+        update(rectToUpdate);
+    } else if (!d->batchFlushTimer.isActive()) {
+        const int remainingMs = qBound(1, frameBudgetMs - static_cast<int>(elapsedMs), frameBudgetMs);
+        d->batchFlushTimer.start(remainingMs);
+    }
 }
 
 void KisOpenGLCanvas2::updateCanvasDecorations(const QRect &decoUpdateRect)
 {
-    update(decoUpdateRect);
+    if (decoUpdateRect.isEmpty()) {
+        return;
+    }
+
+    d->batchedUpdateRect |= decoUpdateRect;
+
+    const int frameBudgetMs = brocreateFrameIntervalMs(this);
+    const qint64 elapsedMs = d->lastPaintTimer.isValid() ? d->lastPaintTimer.elapsed() : frameBudgetMs;
+
+    if (!d->batchFlushTimer.isActive() && !isBusy() && elapsedMs >= frameBudgetMs) {
+        const QRect rectToUpdate = d->batchedUpdateRect;
+        d->batchedUpdateRect = QRect();
+        d->gpuBusyDeferCount = 0;
+        update(rectToUpdate);
+    } else if (!d->batchFlushTimer.isActive()) {
+        const int remainingMs = qBound(1, frameBudgetMs - static_cast<int>(elapsedMs), frameBudgetMs);
+        d->batchFlushTimer.start(remainingMs);
+    }
 }
 bool KisOpenGLCanvas2::callFocusNextPrevChild(bool next)
 {

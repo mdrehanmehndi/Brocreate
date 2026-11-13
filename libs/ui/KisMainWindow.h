@@ -24,6 +24,8 @@
 
 class QCloseEvent;
 class QMoveEvent;
+class QTouchEvent;
+class QTabletEvent;
 
 class KoCanvasResourceProvider;
 
@@ -36,10 +38,10 @@ class KoCanvasController;
 
 
 /**
- * @brief Main window for Krita
+ * @brief Main window for Brocreate
  *
- * This class is used to represent a main window within a Krita session. Each
- * main window contains a menubar and some toolbars, and potentially several
+ * This class is used to represent a main window within a Brocreate session. Each
+ * main window contains floating tablet islands, dockers, and potentially several
  * views of several canvases.
  *
  */
@@ -59,7 +61,7 @@ public:
 public:
 
     /**
-     *  Initializes a Krita main window (with its basic GUI etc.).
+     *  Initializes a Brocreate main window (with its basic GUI etc.).
      */
     explicit KisMainWindow(QUuid id = QUuid());
 
@@ -231,7 +233,7 @@ public Q_SLOTS:
      *  Slot for opening a saved file.
      *
      *  If the current document is empty, the opened document replaces it.
-     *  If not a new mainwindow will be opened for showing the opened file.
+     *  If not, a new mainwindow will be opened for showing the opened file.
      */
     void slotFileOpen(bool isImporting = false);
 
@@ -239,7 +241,7 @@ public Q_SLOTS:
      *  Slot for opening a file among the recently opened files.
      *
      *  If the current document is empty, the opened document replaces it.
-     *  If not a new mainwindow will be opened for showing the opened file.
+     *  If not, a new mainwindow will be opened for showing the opened file.
      */
     void slotFileOpenRecent(const QUrl &);
 
@@ -317,7 +319,7 @@ private Q_SLOTS:
     void slotFileSaveAs();
 
     void importAnimation();
-    
+
     void importVideoAnimation();
 
     void renderAnimation();
@@ -408,7 +410,7 @@ private Q_SLOTS:
     void closeCurrentWindow();
     void checkSanity();
 
-    /// Quits Krita with error message from m_errorMessage.
+    /// Quits Brocreate with error message from m_errorMessage.
     void showErrorAndDie();
 
     void initializeGeometry();
@@ -425,11 +427,26 @@ private Q_SLOTS:
 
     void slotStoragesWarning(const QString &location = QString());
 
+    void slotUpdateBrocreateOverlayGeometry();
+    void slotBrocreateBlendModeChanged(int index);
+    void slotBrocreateOpacityChanged(qreal normalizedValue);
+    void slotBrocreateBrushSizeChanged(qreal normalizedValue);
+    void slotBrocreateToolButtonClicked();
+    void slotBrocreateQuickSettingsMenu();
+    void slotBrocreateCopyPasteMenu(const QPoint &globalPos);
+    void slotBrocreateLongPressEyedropper();
+    void slotBrocreateToggleAnimationLayout();
+    void slotBrocreateToggleFullscreenCanvasOnly();
+    void slotBrocreateToggleStudioDock();
+    void slotBrocreateTriggerActionByName();
+    void slotBrocreateCanvasResourceChanged(int key, const QVariant &value);
+
 protected:
 
     void closeEvent(QCloseEvent * e) override;
     void resizeEvent(QResizeEvent * e) override;
     void showEvent(QShowEvent *event) override;
+    bool eventFilter(QObject *watched, QEvent *event) override;
 
     // QWidget overrides
     void dragMoveEvent(QDragMoveEvent *event) override;
@@ -480,6 +497,14 @@ private:
     void setMainWindowLayoutForCurrentMainWidget(int widgetIndex, bool widgetIndexChanged);
     void adjustLayoutForWelcomePage();
     void applyActionIconOverridesFromLocalXML();
+
+    void setupBrocreateUI();
+    void applyBrocreateDarkTheme();
+    void updateBrocreateFloatingVisibility(bool showCanvasUI);
+    void updateBrocreateColorSwatch();
+    void arrangeBrocreateStudioDocks(bool animationMode);
+    bool handleBrocreateTouchEvent(QObject *watched, QTouchEvent *touchEvent);
+    bool handleBrocreateTabletEvent(QTabletEvent *tabletEvent);
 
 private:
     class Private;

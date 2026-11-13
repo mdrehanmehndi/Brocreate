@@ -11,10 +11,20 @@
 #include <kis_debug.h>
 #include <QQueue>
 #include <klocalizedstring.h>
+#include <QAction>
 #include <QApplication>
+#include <QElapsedTimer>
+#include <QHash>
+#include <QLineF>
+#include <QMenu>
+#include <QPainter>
+#include <QScreen>
+#include <QTimer>
 #include <QTouchEvent>
 #include <QWidget>
+#include <QWindow>
 
+#include <KoColor.h>
 #include <KoToolManager.h>
 #include <KoPointerEvent.h>
 
@@ -23,8 +33,10 @@
 #include <kis_config.h>
 #include <kis_config_notifier.h>
 #include <kis_canvas2.h>
+#include <kis_coordinates_converter.h>
 #include <KisViewManager.h>
 #include <kis_image.h>
+#include <kis_paint_device.h>
 #include <kis_canvas_resource_provider.h>
 #include <kis_favorite_resource_manager.h>
 
@@ -49,6 +61,571 @@
 #include "kis_algebra_2d.h"
 #include "config-qt-patches-present.h"
 
+namespace {
+
+constexpr qint64 BROCREATE_144HZ_BATCH_NS = 6500000; // ~144Hz (6.94ms frame budget)
+constexpr int BROCREATE_144HZ_DELAY_MS = 6;
+constexpr int BROCREATE_PALM_COOLDOWN_MS = 220;
+constexpr int BROCREATE_EYEDROPPER_HOLD_MS = 350;
+constexpr int BROCREATE_TAP_MAX_MS = 360;
+constexpr qreal BROCREATE_TAP_SLOP_PX = 18.0;
+constexpr qreal BROCREATE_SWIPE_DOWN_MIN_PX = 55.0;
+constexpr qreal BROCREATE_QUICK_PINCH_RATIO = 0.60;
+constexpr int BROCREATE_QUICK_PINCH_MAX_MS = 280;
+
+class BrocreateColorLoupe : public QWidget
+{
+public:
+    explicit BrocreateColorLoupe(QWidget *parent = nullptr)
+        : QWidget(parent, Qt::ToolTip | Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint)
+    {
+        setAttribute(Qt::WA_TransparentForInput, true);
+        setAttribute(Qt::WA_TranslucentBackground, true);
+        setAttribute(Qt::WA_ShowWithoutActivating, true);
+        setFixedSize(76, 76);
+    }
+
+    void setSampledColor(const QColor &color, const QPoint &globalPos)
+    {
+        m_color = color;
+        move(globalPos - QPoint(width() / 2, height() + 28));
+        if (!isVisible()) {
+            show();
+        }
+        update();
+    }
+
+protected:
+    void paintEvent(QPaintEvent *) override
+    {
+        QPainter p(this);
+        p.setRenderHint(QPainter::Antialiasing, true);
+
+        const QRectF outerRect(3.0, 3.0, width() - 6.0, height() - 6.0);
+        p.setPen(QPen(QColor(0x27, 0x27, 0x2A), 2.5));
+        p.setBrush(Qt::NoBrush);
+        p.drawEllipse(outerRect);
+
+        const QRectF ringRect = outerRect.adjusted(6.0, 6.0, -6.0, -6.0);
+        p.setPen(QPen(m_color, 11.0));
+        p.drawEllipse(ringRect);
+
+        const QRectF innerRect = ringRect.adjusted(6.0, 6.0, -6.0, -6.0);
+        p.setPen(QPen(QColor(255, 255, 255, 220), 1.5));
+        p.setBrush(QColor(20, 20, 23, 120));
+        p.drawEllipse(innerRect);
+    }
+
+private:
+    QColor m_color = QColor(0x00, 0x66, 0xFF);
+};
+
+class BrocreateGestureHandler : public QObject
+{
+public:
+    explicit BrocreateGestureHandler(KisInputManager *manager)
+        : QObject(manager)
+        , m_manager(manager)
+    {
+        m_eyedropperTimer.setSingleShot(true);
+        m_eyedropperTimer.setTimerType(Qt::PreciseTimer);
+        connect(&m_eyedropperTimer, &QTimer::timeout, this, [this]() {
+            onEyedropperTimeout();
+        });
+    }
+
+    ~BrocreateGestureHandler() override
+    {
+        if (m_loupe) {
+            m_loupe->hide();
+            m_loupe->deleteLater();
+        }
+    }
+
+    int batchDelayMs() const
+    {
+        QWidget *w = m_manager && m_manager->canvas() ? m_manager->canvas()->canvasWidget() : nullptr;
+        if (w && w->window() && w->window()->windowHandle() && w->window()->windowHandle()->screen()) {
+            const qreal hz = w->window()->windowHandle()->screen()->refreshRate();
+            if (hz >= 30.0 && hz <= 240.0) {
+                return qBound(4, static_cast<int>(1000.0 / hz), 16);
+            }
+        }
+        return BROCREATE_144HZ_DELAY_MS;
+    }
+
+    bool shouldBatchHiResMove(const QPointF &pos)
+    {
+        if (!m_hiResBatchTimer.isValid()) {
+            m_hiResBatchTimer.start();
+            m_lastHiResPos = pos;
+            return false;
+        }
+        const qint64 elapsedNs = m_hiResBatchTimer.nsecsElapsed();
+        const qreal dist = QLineF(m_lastHiResPos, pos).length();
+        const qint64 budgetNs = static_cast<qint64>(batchDelayMs()) * 1000000LL;
+        if (elapsedNs < qMin(budgetNs, BROCREATE_144HZ_BATCH_NS) && dist < 8.0) {
+            return true;
+        }
+        m_hiResBatchTimer.restart();
+        m_lastHiResPos = pos;
+        return false;
+    }
+
+    void resetHiResBatching()
+    {
+        m_hiResBatchTimer.invalidate();
+    }
+
+    void onTabletPress()
+    {
+        m_stylusDown = true;
+        m_lastStylusTimer.restart();
+        cancelActiveGesture();
+    }
+
+    void onTabletMove()
+    {
+        m_lastStylusTimer.restart();
+    }
+
+    void onTabletRelease()
+    {
+        m_stylusDown = false;
+        m_lastStylusTimer.restart();
+    }
+
+    bool isPalmRejected() const
+    {
+        return m_stylusDown ||
+               (m_lastStylusTimer.isValid() && m_lastStylusTimer.elapsed() < BROCREATE_PALM_COOLDOWN_MS);
+    }
+
+    void cancelActiveGesture()
+    {
+        m_eyedropperTimer.stop();
+        m_eyedropperActive = false;
+        if (m_loupe) {
+            m_loupe->hide();
+        }
+        m_gestureConsumed = true;
+        m_touchStartPos.clear();
+        m_touchLastPos.clear();
+    }
+
+    bool handleTouchBegin(QTouchEvent *event, KisShortcutMatcher &matcher)
+    {
+        if (isPalmRejected()) {
+            cancelActiveGesture();
+            matcher.touchCancelEvent(event);
+            return true;
+        }
+
+        m_eyedropperTimer.stop();
+        m_eyedropperActive = false;
+        if (m_loupe) {
+            m_loupe->hide();
+        }
+
+        m_gestureTimer.restart();
+        m_touchStartPos.clear();
+        m_touchLastPos.clear();
+        m_gestureMovedTooMuch = false;
+        m_swipeTriggered = false;
+        m_pinchTriggered = false;
+        m_gestureConsumed = false;
+        m_initialPinchSpan = 0.0;
+        m_pinchStartMs = 0;
+
+        int activeCount = 0;
+        QPointF firstPos;
+        const QList<QTouchEvent::TouchPoint> points = event->touchPoints();
+        for (const QTouchEvent::TouchPoint &tp : points) {
+            if (tp.state() != Qt::TouchPointReleased) {
+                m_touchStartPos.insert(tp.id(), tp.pos());
+                m_touchLastPos.insert(tp.id(), tp.pos());
+                if (activeCount == 0) {
+                    firstPos = tp.pos();
+                }
+                ++activeCount;
+            }
+        }
+
+        m_maxTouchCount = activeCount;
+        if (activeCount == 1) {
+            m_eyedropperPos = firstPos;
+            m_eyedropperTimer.start(BROCREATE_EYEDROPPER_HOLD_MS);
+        }
+
+        return false;
+    }
+
+    bool handleTouchUpdate(QTouchEvent *event, KisShortcutMatcher &matcher)
+    {
+        if (isPalmRejected()) {
+            cancelActiveGesture();
+            matcher.touchCancelEvent(event);
+            return true;
+        }
+
+        QList<QTouchEvent::TouchPoint> activePoints;
+        const QList<QTouchEvent::TouchPoint> points = event->touchPoints();
+        for (const QTouchEvent::TouchPoint &tp : points) {
+            if (tp.state() != Qt::TouchPointReleased) {
+                activePoints.append(tp);
+            }
+        }
+
+        if (m_eyedropperActive) {
+            if (!activePoints.isEmpty()) {
+                m_eyedropperPos = activePoints.first().pos();
+                sampleColorAt(m_eyedropperPos);
+            }
+            return true;
+        }
+
+        if (m_gestureConsumed) {
+            return true;
+        }
+
+        m_maxTouchCount = qMax(m_maxTouchCount, activePoints.size());
+
+        if (activePoints.size() != 1) {
+            m_eyedropperTimer.stop();
+        }
+
+        for (const QTouchEvent::TouchPoint &tp : activePoints) {
+            if (!m_touchStartPos.contains(tp.id())) {
+                m_touchStartPos.insert(tp.id(), tp.pos());
+            }
+            m_touchLastPos[tp.id()] = tp.pos();
+
+            const qreal dist = QLineF(m_touchStartPos.value(tp.id()), tp.pos()).length();
+            if (dist > BROCREATE_TAP_SLOP_PX) {
+                m_gestureMovedTooMuch = true;
+                m_eyedropperTimer.stop();
+            } else if (activePoints.size() == 1) {
+                m_eyedropperPos = tp.pos();
+            }
+        }
+
+        // 3-Finger Swipe Down = Copy/Paste Menu
+        if (activePoints.size() == 3 && !m_swipeTriggered && !m_pinchTriggered && m_gestureTimer.elapsed() < 700) {
+            qreal sumDx = 0.0;
+            qreal sumDy = 0.0;
+            QPointF centroid(0.0, 0.0);
+            bool allMovedDown = true;
+
+            for (const QTouchEvent::TouchPoint &tp : activePoints) {
+                const QPointF start = m_touchStartPos.value(tp.id(), tp.pos());
+                const QPointF delta = tp.pos() - start;
+                sumDx += delta.x();
+                sumDy += delta.y();
+                centroid += tp.pos();
+                if (delta.y() < 25.0) {
+                    allMovedDown = false;
+                }
+            }
+
+            const qreal avgDx = sumDx / 3.0;
+            const qreal avgDy = sumDy / 3.0;
+            centroid /= 3.0;
+
+            if (allMovedDown && avgDy > BROCREATE_SWIPE_DOWN_MIN_PX && avgDy > qAbs(avgDx) * 1.35) {
+                m_swipeTriggered = true;
+                m_gestureConsumed = true;
+                m_eyedropperTimer.stop();
+                matcher.touchCancelEvent(event);
+                showCopyPasteMenu(centroid);
+                return true;
+            }
+        }
+
+        // QuickPinch = Fit to screen
+        if (activePoints.size() == 2 && !m_pinchTriggered && !m_swipeTriggered) {
+            const qreal span = QLineF(activePoints[0].pos(), activePoints[1].pos()).length();
+            if (m_initialPinchSpan <= 0.0) {
+                m_initialPinchSpan = span;
+                m_pinchStartMs = m_gestureTimer.elapsed();
+            } else if (m_initialPinchSpan > 50.0) {
+                const qreal ratio = span / m_initialPinchSpan;
+                const qint64 dt = m_gestureTimer.elapsed() - m_pinchStartMs;
+                if (ratio < BROCREATE_QUICK_PINCH_RATIO && dt < BROCREATE_QUICK_PINCH_MAX_MS) {
+                    m_pinchTriggered = true;
+                    m_gestureConsumed = true;
+                    m_eyedropperTimer.stop();
+                    matcher.touchCancelEvent(event);
+                    triggerFitToScreen();
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    bool handleTouchEnd(QTouchEvent *event, KisShortcutMatcher &matcher)
+    {
+        m_eyedropperTimer.stop();
+
+        if (m_eyedropperActive) {
+            m_eyedropperActive = false;
+            if (m_loupe) {
+                m_loupe->hide();
+            }
+            return true;
+        }
+
+        if (m_gestureConsumed) {
+            m_gestureConsumed = false;
+            return true;
+        }
+
+        int remainingActive = 0;
+        const QList<QTouchEvent::TouchPoint> points = event->touchPoints();
+        for (const QTouchEvent::TouchPoint &tp : points) {
+            if (tp.state() != Qt::TouchPointReleased) {
+                ++remainingActive;
+            }
+        }
+
+        if (remainingActive == 0 &&
+            !isPalmRejected() &&
+            !m_gestureMovedTooMuch &&
+            !m_swipeTriggered &&
+            !m_pinchTriggered &&
+            m_gestureTimer.elapsed() < BROCREATE_TAP_MAX_MS) {
+            bool fired = false;
+            if (m_maxTouchCount == 2) {
+                // 2-Finger Tap = Undo
+                fired = triggerActionByCandidates({QStringLiteral("edit_undo")});
+            } else if (m_maxTouchCount == 3) {
+                // 3-Finger Tap = Redo
+                fired = triggerActionByCandidates({QStringLiteral("edit_redo")});
+            } else if (m_maxTouchCount == 4) {
+                // 4-Finger Tap = Fullscreen / Canvas-Only
+                fired = triggerActionByCandidates({
+                    QStringLiteral("view_show_canvas_only"),
+                    QStringLiteral("fullscreen")
+                });
+            }
+
+            if (fired) {
+                matcher.touchCancelEvent(event);
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    void handleTouchCancel()
+    {
+        m_eyedropperTimer.stop();
+        m_eyedropperActive = false;
+        m_gestureConsumed = false;
+        if (m_loupe) {
+            m_loupe->hide();
+        }
+        m_touchStartPos.clear();
+        m_touchLastPos.clear();
+    }
+
+private:
+    QAction *findActionByCandidates(const QStringList &names) const
+    {
+        if (!m_manager || !m_manager->canvas()) {
+            return nullptr;
+        }
+
+        QList<QObject *> searchRoots;
+        if (m_manager->canvas()->viewManager()) {
+            searchRoots.append(m_manager->canvas()->viewManager());
+        }
+        if (m_manager->canvas()->canvasWidget() && m_manager->canvas()->canvasWidget()->window()) {
+            searchRoots.append(m_manager->canvas()->canvasWidget()->window());
+        }
+        if (QApplication::activeWindow()) {
+            searchRoots.append(QApplication::activeWindow());
+        }
+
+        for (const QString &name : names) {
+            for (QObject *root : searchRoots) {
+                if (!root) {
+                    continue;
+                }
+                if (QAction *act = root->findChild<QAction *>(name)) {
+                    return act;
+                }
+            }
+        }
+        return nullptr;
+    }
+
+    bool triggerActionByCandidates(const QStringList &names) const
+    {
+        if (QAction *act = findActionByCandidates(names)) {
+            if (act->isEnabled()) {
+                act->trigger();
+                return true;
+            }
+        }
+        return false;
+    }
+
+    void triggerFitToScreen() const
+    {
+        triggerActionByCandidates({
+            QStringLiteral("view_zoom_to_page"),
+            QStringLiteral("zoom_to_page"),
+            QStringLiteral("view_zoom_fit_page"),
+            QStringLiteral("zoom_to_100pct")
+        });
+    }
+
+    void onEyedropperTimeout()
+    {
+        if (isPalmRejected() || m_gestureMovedTooMuch || m_swipeTriggered || m_pinchTriggered) {
+            return;
+        }
+        m_eyedropperActive = true;
+        m_gestureConsumed = true;
+        sampleColorAt(m_eyedropperPos);
+    }
+
+    void sampleColorAt(const QPointF &widgetPos)
+    {
+        if (!m_manager || !m_manager->canvas()) {
+            return;
+        }
+
+        KisCanvas2 *canvas = m_manager->canvas();
+        KisImageWSP image = canvas->image();
+        if (!image || !image->projection()) {
+            return;
+        }
+
+        const KisCoordinatesConverter *converter = canvas->coordinatesConverter();
+        if (!converter) {
+            return;
+        }
+
+        const QPoint imagePt = converter->widgetToImage(widgetPos).toPoint();
+        const QRect bounds = image->bounds();
+        if (!bounds.contains(imagePt)) {
+            return;
+        }
+
+        KoColor sampled(image->projection()->colorSpace());
+        if (image->projection()->pixel(imagePt.x(), imagePt.y(), &sampled)) {
+            if (canvas->viewManager() && canvas->viewManager()->canvasResourceProvider()) {
+                canvas->viewManager()->canvasResourceProvider()->setFGColor(sampled);
+            }
+
+            QWidget *cw = canvas->canvasWidget();
+            if (cw) {
+                if (!m_loupe) {
+                    m_loupe = new BrocreateColorLoupe(cw->window());
+                }
+                m_loupe->setSampledColor(sampled.toQColor(), cw->mapToGlobal(widgetPos.toPoint()));
+            }
+        }
+    }
+
+    void showCopyPasteMenu(const QPointF &widgetPos)
+    {
+        if (!m_manager || !m_manager->canvas() || !m_manager->canvas()->canvasWidget()) {
+            return;
+        }
+
+        QWidget *cw = m_manager->canvas()->canvasWidget();
+        QMenu *menu = new QMenu(cw);
+        menu->setAttribute(Qt::WA_DeleteOnClose, true);
+        menu->setStyleSheet(QStringLiteral(
+            "QMenu {"
+            "  background-color: #141417;"
+            "  color: #F4F4F5;"
+            "  border: 1px solid #27272A;"
+            "  border-radius: 14px;"
+            "  padding: 6px;"
+            "  font-size: 14px;"
+            "}"
+            "QMenu::item {"
+            "  padding: 10px 22px;"
+            "  border-radius: 8px;"
+            "}"
+            "QMenu::item:selected {"
+            "  background-color: #0066FF;"
+            "  color: #FFFFFF;"
+            "}"
+            "QMenu::item:disabled {"
+            "  color: #71717A;"
+            "}"
+            "QMenu::separator {"
+            "  height: 1px;"
+            "  background: #27272A;"
+            "  margin: 4px 10px;"
+            "}"
+        ));
+
+        auto addActionEntry = [this, menu](const QString &label, const QStringList &candidates) {
+            QAction *target = findActionByCandidates(candidates);
+            QAction *entry = menu->addAction(label);
+            entry->setEnabled(target && target->isEnabled());
+            if (target) {
+                connect(entry, &QAction::triggered, target, &QAction::trigger);
+            }
+        };
+
+        addActionEntry(i18n("Cut"), {QStringLiteral("edit_cut")});
+        addActionEntry(i18n("Copy"), {QStringLiteral("edit_copy")});
+        addActionEntry(i18n("Copy Merged"), {QStringLiteral("copy_merged")});
+        menu->addSeparator();
+        addActionEntry(i18n("Paste"), {QStringLiteral("edit_paste")});
+        addActionEntry(i18n("Paste into New Layer"), {QStringLiteral("paste_new")});
+        addActionEntry(i18n("Duplicate Layer"), {QStringLiteral("duplicatelayer")});
+        menu->addSeparator();
+        addActionEntry(i18n("Clear"), {QStringLiteral("clear")});
+
+        menu->popup(cw->mapToGlobal(widgetPos.toPoint()));
+    }
+
+    KisInputManager *m_manager = nullptr;
+    bool m_stylusDown = false;
+    QElapsedTimer m_lastStylusTimer;
+    QElapsedTimer m_hiResBatchTimer;
+    QPointF m_lastHiResPos;
+
+    QElapsedTimer m_gestureTimer;
+    int m_maxTouchCount = 0;
+    QHash<int, QPointF> m_touchStartPos;
+    QHash<int, QPointF> m_touchLastPos;
+    bool m_gestureMovedTooMuch = false;
+    bool m_swipeTriggered = false;
+    bool m_pinchTriggered = false;
+    bool m_gestureConsumed = false;
+    qreal m_initialPinchSpan = 0.0;
+    qint64 m_pinchStartMs = 0;
+
+    bool m_eyedropperActive = false;
+    QPointF m_eyedropperPos;
+    QTimer m_eyedropperTimer;
+    QPointer<BrocreateColorLoupe> m_loupe;
+};
+
+QHash<const KisInputManager *, BrocreateGestureHandler *> &gestureHandlerRegistry()
+{
+    static QHash<const KisInputManager *, BrocreateGestureHandler *> registry;
+    return registry;
+}
+
+BrocreateGestureHandler *gestureHandlerFor(const KisInputManager *manager)
+{
+    return gestureHandlerRegistry().value(manager, nullptr);
+}
+
+} // namespace
+
 
 template <typename T>
 uint qHash(QPointer<T> value) {
@@ -59,6 +636,10 @@ KisInputManager::KisInputManager(QObject *parent, KoToolManager *toolManager)
     : QObject(parent), d(new Private(this, toolManager))
 {
     d->setupActions();
+
+    BrocreateGestureHandler *handler = new BrocreateGestureHandler(this);
+    gestureHandlerRegistry().insert(this, handler);
+    d->moveEventCompressor.setDelay(handler->batchDelayMs());
 
     connect(KisConfigNotifier::instance(), SIGNAL(configChanged()), SLOT(slotConfigChanged()));
     slotConfigChanged();
@@ -81,6 +662,7 @@ KisInputManager::KisInputManager(QObject *parent, KoToolManager *toolManager)
 
 KisInputManager::~KisInputManager()
 {
+    gestureHandlerRegistry().remove(this);
 #ifdef Q_OS_MACOS
     KisExtendedModifiersMapper::setLocalMonitor(false);
 #endif
@@ -127,6 +709,9 @@ void KisInputManager::slotConfigChanged()
     d->ignoreHighFunctionKeys = KisConfig(true).ignoreHighFunctionKeys();
     d->fixShortcutMatcherModifiersState();
 #endif
+    if (BrocreateGestureHandler *handler = gestureHandlerFor(this)) {
+        d->moveEventCompressor.setDelay(handler->batchDelayMs());
+    }
 }
 
 void KisInputManager::toggleTabletLogger()
@@ -242,19 +827,29 @@ bool KisInputManager::compressMoveEventCommon(Event *event)
 
 
     bool retval = false;
+    BrocreateGestureHandler *handler = gestureHandlerFor(this);
+    const bool isMoveEvent =
+        (event->type() == QEvent::MouseMove || event->type() == QEvent::TabletMove);
+
+    const bool shouldBatchFor144Hz =
+        isMoveEvent && handler && handler->shouldBatchHiResMove(event->pos());
 
     /**
      * Compress the events if the tool doesn't need high resolution input
+     * or when sub-frame events arrive faster than the 144Hz render cadence.
      */
-    if ((event->type() == QEvent::MouseMove ||
-         event->type() == QEvent::TabletMove) &&
+    if (isMoveEvent &&
             (!d->matcher.supportsHiResInputEvents() ||
-             d->testingCompressBrushEvents)) {
+             d->testingCompressBrushEvents ||
+             shouldBatchFor144Hz)) {
 #if (QT_VERSION < QT_VERSION_CHECK(6, 0, 0))
         KoPointerEvent::copyQtPointerEvent(event, d->compressedMoveEvent);
 #else
         d->compressedMoveEvent.reset(event->clone());
 #endif
+        if (handler) {
+            d->moveEventCompressor.setDelay(handler->batchDelayMs());
+        }
         d->moveEventCompressor.start();
 
         /**
@@ -298,6 +893,7 @@ bool shouldResetWheelDelta(QEvent * event)
 bool KisInputManager::eventFilterImpl(QEvent * event)
 {
     bool retval = false;
+    BrocreateGestureHandler *handler = gestureHandlerFor(this);
 
     // Try closing any open popup widget and
     // consume input if possible.
@@ -375,6 +971,12 @@ bool KisInputManager::eventFilterImpl(QEvent * event)
     case QEvent::MouseButtonDblClick: {
         QMouseEvent *mouseEvent = static_cast<QMouseEvent*>(event);
 
+        // Palm rejection: never let touch-synthesized mouse events draw on the canvas
+        if (mouseEvent->source() != Qt::MouseEventNotSynthesized) {
+            event->setAccepted(true);
+            return true;
+        }
+
         if (d->popupWidget) {
             retval = true;
         } else {
@@ -384,11 +986,19 @@ bool KisInputManager::eventFilterImpl(QEvent * event)
         }
         //Reset signal compressor to prevent processing events before press late
         d->resetCompressor();
+        if (handler) {
+            handler->resetHiResBatching();
+        }
         event->setAccepted(retval);
         break;
     }
     case QEvent::MouseButtonRelease: {
         QMouseEvent *mouseEvent = static_cast<QMouseEvent*>(event);
+        if (mouseEvent->source() != Qt::MouseEventNotSynthesized) {
+            event->setAccepted(true);
+            return true;
+        }
+        slotCompressedMoveEvent();
         retval = d->matcher.buttonReleased(mouseEvent->button(), mouseEvent);
         event->setAccepted(retval);
         break;
@@ -484,6 +1094,10 @@ bool KisInputManager::eventFilterImpl(QEvent * event)
     }
     case QEvent::MouseMove: {
         QMouseEvent *mouseEvent = static_cast<QMouseEvent*>(event);
+        if (mouseEvent->source() != Qt::MouseEventNotSynthesized) {
+            event->setAccepted(true);
+            return true;
+        }
         retval = compressMoveEventCommon(mouseEvent);
 
         break;
@@ -598,6 +1212,10 @@ bool KisInputManager::eventFilterImpl(QEvent * event)
     }
     case QEvent::TabletPress: {
         QTabletEvent *tabletEvent = static_cast<QTabletEvent*>(event);
+        if (handler) {
+            handler->onTabletPress();
+            handler->resetHiResBatching();
+        }
 
         {
             //Make sure the input actions know we are active.
@@ -628,6 +1246,9 @@ bool KisInputManager::eventFilterImpl(QEvent * event)
     }
     case QEvent::TabletMove: {
         QTabletEvent *tabletEvent = static_cast<QTabletEvent*>(event);
+        if (handler) {
+            handler->onTabletMove();
+        }
         retval = compressMoveEventCommon(tabletEvent);
 
         if (d->tabletLatencyTracker) {
@@ -644,6 +1265,10 @@ bool KisInputManager::eventFilterImpl(QEvent * event)
     }
     case QEvent::TabletRelease: {
         QTabletEvent *tabletEvent = static_cast<QTabletEvent*>(event);
+        slotCompressedMoveEvent();
+        if (handler) {
+            handler->onTabletRelease();
+        }
         retval = d->matcher.buttonReleased(tabletEvent->button(), tabletEvent);
         retval = true;
         event->setAccepted(true);
@@ -664,6 +1289,11 @@ bool KisInputManager::eventFilterImpl(QEvent * event)
         QTouchEvent *touchEvent = static_cast<QTouchEvent *>(event);
         KisAbstractInputAction::setInputManager(this);
 
+        if (handler && handler->handleTouchBegin(touchEvent, d->matcher)) {
+            event->accept();
+            return true;
+        }
+
         retval = d->matcher.touchBeginEvent(touchEvent);
 
         d->resetCompressor();
@@ -680,6 +1310,11 @@ bool KisInputManager::eventFilterImpl(QEvent * event)
             return true;
         }
         QTouchEvent *touchEvent = static_cast<QTouchEvent*>(event);
+
+        if (handler && handler->handleTouchUpdate(touchEvent, d->matcher)) {
+            event->accept();
+            return true;
+        }
 
 #ifdef Q_OS_MAC
         const int pressedCount = KisTouchShortcut::countTouchPoints(touchEvent, KisTouchShortcut::pressedOnlyTouchStates());
@@ -733,6 +1368,11 @@ bool KisInputManager::eventFilterImpl(QEvent * event)
         }
         QTouchEvent *touchEvent = static_cast<QTouchEvent*>(event);
 
+        if (handler && handler->handleTouchEnd(touchEvent, d->matcher)) {
+            event->accept();
+            return true;
+        }
+
         retval = d->matcher.touchEndEvent(touchEvent);
 
         // we accept touch events unconditionally to disable
@@ -742,6 +1382,9 @@ bool KisInputManager::eventFilterImpl(QEvent * event)
     }
     case QEvent::TouchCancel:
     {
+        if (handler) {
+            handler->handleTouchCancel();
+        }
         if (d->popupWasActive) {
             event->setAccepted(true);
             return true;
@@ -875,6 +1518,15 @@ void KisInputManager::profileChanged()
         const QList<KisShortcutConfiguration*> shortcuts = profile->allShortcuts();
 
         for (KisShortcutConfiguration * const shortcut : shortcuts) {
+            // Brocreate palm rejection: fingers are strictly for gestures, stylus is for drawing
+            if (shortcut->type() == KisShortcutConfiguration::TouchGestureType &&
+                shortcut->action() &&
+                shortcut->action()->id() == QStringLiteral("Tool Invocation") &&
+                (shortcut->touchGesture() == KisShortcutConfiguration::OneFingerDrag ||
+                 shortcut->touchGesture() == KisShortcutConfiguration::OneFingerTap)) {
+                continue;
+            }
+
             dbgUI << "Adding shortcut" << shortcut->keys() << "for action" << shortcut->action()->name();
             switch(shortcut->type()) {
             case KisShortcutConfiguration::KeyCombinationType:
@@ -896,15 +1548,8 @@ void KisInputManager::profileChanged()
                 break;
             }
         }
-
-        {
-            KisAbstractInputAction *action = profile->actionForId("Tool Invocation");
-            if (action) {
-                // Touch painting shortcuts
-                d->addTouchShortcut(action, KisToolInvocationAction::ActivateShortcut, KisShortcutConfiguration::OneFingerDrag, true);
-                d->addTouchShortcut(action, KisToolInvocationAction::ActivateShortcut, KisShortcutConfiguration::OneFingerTap, true);
-            }
-        }
+        // Intentionally do not bind OneFingerDrag / OneFingerTap to Tool Invocation:
+        // stylus draws exclusively while fingers perform Procreate gestures.
     }
     else {
         warnUI << "No Input Profile Found: canvas interaction will be impossible";
