@@ -86,6 +86,7 @@ jobs:
           export KDECI_REPO_METADATA_PATH="/workspace/krita/krita-deps-management/repo-metadata"
           export CI_COMMIT_REF_PROTECTED="true"
 
+          echo "=== .kde-ci.yml ==="; cat "$CI_PROJECT_DIR/.kde-ci.yml"; echo "=== global-config.yml ==="; cat /workspace/krita/krita-deps-management/global-config.yml
           rm -rf "$KDECI_WORKDIR_PATH/krita/_build"
 
           # 4. Compile Krita and package the APK
