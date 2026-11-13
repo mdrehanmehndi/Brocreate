@@ -55,7 +55,7 @@ jobs:
           python -s "$CI_PROJECT_DIR/krita-deps-management/tools/generate-deps-file.py" \
             -o "$CI_PROJECT_DIR/.kde-ci.yml" \
             -s "$CI_PROJECT_DIR/krita-deps-management/latest/krita-deps.yml"
-          python -c "import yaml; p='$CI_PROJECT_DIR/.kde-ci.yml'; d=yaml.safe_load(open(p)); d.setdefault('Options',{})['build-tests']=False; d['Options']['run-tests']=False; d['Options']['run-cppcheck']=False; yaml.safe_dump(d,open(p,'w'))"
+          python -c "import yaml; p='$CI_PROJECT_DIR/.kde-ci.yml'; d=yaml.safe_load(open(p)); d.setdefault('Options',{})['build-tests']=False; d['Options']['run-tests']=False; d['Options']['run-cppcheck']=False; d.update({'PostInstallScripts':[{'on':['@all'],'require':d['PostInstallScripts']}]}) if isinstance(d.get('PostInstallScripts'),dict) else None; yaml.safe_dump(d,open(p,'w'))"
           cp "$CI_PROJECT_DIR/.kde-ci.yml" "$KDECI_WORKDIR_PATH/.kde-ci.yml"
 
           # 2. Run setup-env.py to download & unpack all 56 prebuilt Android deps
