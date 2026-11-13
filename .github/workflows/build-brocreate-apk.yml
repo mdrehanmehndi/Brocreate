@@ -36,25 +36,11 @@ jobs:
             source /var/lib/ci-files/setup-environment.sh
           fi
 
-          # Export ALL required KDECI variables so run-ci-build.py never hits KeyError
           export CI_PROJECT_DIR="/workspace/krita"
           export KDECI_WORKDIR_PATH="/workspace/workdir"
-          export KDECI_CACHE_PATH="/workspace/workdir/cache"
-          export KDECI_CC_CACHE="/workspace/workdir/ccache"
-          export EXTERNALS_DOWNLOAD_DIR="/workspace/workdir/cache/downloads"
-          export KDECI_GITLAB_SERVER="https://invent.kde.org/"
-          export KDECI_PACKAGE_PROJECT="teams/ci-artifacts/krita-android-arm64-v8a"
           export KDECI_ANDROID_ABI="arm64-v8a"
           export ANDROID_ABI="arm64-v8a"
-          export KDECI_SKIP_ECM_ANDROID_TOOLCHAIN="True"
-          export KDECI_BUILD_TYPE="Release"
-          export KDECI_COMPRESS_PACKAGES_ON_DOWNLOAD="1"
-          export KDECI_ALLOW_PACKAGE_OVERRIDE_BY_CACHE="1"
-          export KDECI_GLOBAL_CONFIG_OVERRIDE_PATH="/workspace/krita/krita-deps-management/global-config.yml"
-          export KDECI_REPO_METADATA_PATH="/workspace/krita/krita-deps-management/repo-metadata"
-          export CI_COMMIT_REF_PROTECTED="true"
-
-          mkdir -p "$KDECI_WORKDIR_PATH" "$KDECI_CACHE_PATH" "$KDECI_CC_CACHE" "$EXTERNALS_DOWNLOAD_DIR"
+          mkdir -p "$KDECI_WORKDIR_PATH"
 
           cd "$CI_PROJECT_DIR"
           rm -rf krita-deps-management
@@ -65,29 +51,46 @@ jobs:
           source "$KDECI_WORKDIR_PATH/PythonEnv/bin/activate"
           pip install -r "$CI_PROJECT_DIR/krita-deps-management/requirements.txt"
 
-          # Unpack prebuilt Android dependencies into /workspace/workdir/krita/_install
+          # 1. Generate Android .kde-ci.yml BEFORE setup-env.py (Prevent TypeError)
+          python -s "$CI_PROJECT_DIR/krita-deps-management/tools/generate-deps-file.py" \
+            -o "$CI_PROJECT_DIR/.kde-ci.yml" \
+            -s "$CI_PROJECT_DIR/krita-deps-management/latest/krita-deps.yml"
+          python -c "import yaml; p='$CI_PROJECT_DIR/.kde-ci.yml'; d=yaml.safe_load(open(p)); d.setdefault('Options',{})['build-tests']=False; d['Options']['run-tests']=False; d['Options']['run-cppcheck']=False; yaml.safe_dump(d,open(p,'w'))"
+          cp "$CI_PROJECT_DIR/.kde-ci.yml" "$KDECI_WORKDIR_PATH/.kde-ci.yml"
+
+          # 2. Run setup-env.py to download & unpack all 56 prebuilt Android deps
           python krita-deps-management/tools/setup-env.py \
             --full-krita-env \
             -v "$KDECI_WORKDIR_PATH/PythonEnv" \
             --android-abi "$KDECI_ANDROID_ABI" \
             --root "$KDECI_WORKDIR_PATH"
 
-          # Disable slow unit tests & cppcheck in both .kde-ci.yml locations
-          for p in "$CI_PROJECT_DIR/.kde-ci.yml" "$KDECI_WORKDIR_PATH/.kde-ci.yml"; do
-            if [ -f "$p" ]; then
-              python -c "import yaml; d=yaml.safe_load(open('$p')); d.setdefault('Options',{})['build-tests']=False; d['Options']['run-tests']=False; d['Options']['run-cppcheck']=False; yaml.safe_dump(d,open('$p','w'))"
-            fi
-          done
-          cp "$KDECI_WORKDIR_PATH/.kde-ci.yml" "$CI_PROJECT_DIR/.kde-ci.yml" || true
+          # Re-apply test-disabling to .kde-ci.yml in case setup-env.py overwrote it
+          python -c "import yaml; p='$KDECI_WORKDIR_PATH/.kde-ci.yml'; d=yaml.safe_load(open(p)); d.setdefault('Options',{})['build-tests']=False; d['Options']['run-tests']=False; d['Options']['run-cppcheck']=False; yaml.safe_dump(d,open(p,'w'))"
+          cp "$KDECI_WORKDIR_PATH/.kde-ci.yml" "$CI_PROJECT_DIR/.kde-ci.yml"
 
+          # 3. Source generated env AND export KDECI_CACHE_PATH AFTER setup-env.py (Prevent KeyError)
           if [ -f "$KDECI_WORKDIR_PATH/krita/env" ]; then
             source "$KDECI_WORKDIR_PATH/krita/env"
           fi
+          export KDECI_CACHE_PATH="/workspace/workdir/cache"
+          export KDECI_CC_CACHE="/workspace/workdir/ccache"
+          export EXTERNALS_DOWNLOAD_DIR="/workspace/workdir/cache/downloads"
+          export KDECI_GITLAB_SERVER="https://invent.kde.org/"
+          export KDECI_PACKAGE_PROJECT="teams/ci-artifacts/krita-android-arm64-v8a"
+          export KDECI_SKIP_ECM_ANDROID_TOOLCHAIN="True"
+          export KDECI_BUILD_TYPE="Release"
+          export KDECI_COMPRESS_PACKAGES_ON_DOWNLOAD="1"
+          export KDECI_ALLOW_PACKAGE_OVERRIDE_BY_CACHE="1"
+          export KDECI_GLOBAL_CONFIG_OVERRIDE_PATH="/workspace/krita/krita-deps-management/global-config.yml"
+          export KDECI_REPO_METADATA_PATH="/workspace/krita/krita-deps-management/repo-metadata"
+          export CI_COMMIT_REF_PROTECTED="true"
 
-          # Remove empty _build folder created by setup-env.py so run-ci-build.py configures cleanly
           rm -rf "$KDECI_WORKDIR_PATH/krita/_build"
 
+          # 4. Compile Krita and package the APK
           build_and_package() {
+            export KDECI_CACHE_PATH="/workspace/workdir/cache"
             python -u "$CI_PROJECT_DIR/krita-deps-management/ci-utilities/run-ci-build.py" \
               --project krita \
               --branch master \
