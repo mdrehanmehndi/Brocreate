@@ -83,6 +83,7 @@ jobs:
           export KDECI_ALLOW_PACKAGE_OVERRIDE_BY_CACHE="1"
           export KDECI_GLOBAL_CONFIG_OVERRIDE_PATH="/workspace/krita/krita-deps-management/global-config.yml"
           export KDECI_REPO_METADATA_PATH="/workspace/krita/krita-deps-management/repo-metadata"
+          export CMAKE_TOOLCHAIN_FILE="$CI_PROJECT_DIR/krita-deps-management/tools/android-toolchain-krita.cmake"
           export CI_COMMIT_REF_PROTECTED="true"
 
           echo "=== .kde-ci.yml ==="; cat "$CI_PROJECT_DIR/.kde-ci.yml"; echo "=== global-config.yml ==="; cat /workspace/krita/krita-deps-management/global-config.yml
